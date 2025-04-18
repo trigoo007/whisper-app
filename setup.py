@@ -13,11 +13,11 @@ setup(
     name="whisper-app",
     version="1.0.0",
     author="Rodrigo M.",
-    author_email="rodrigo@example.com",
+    author_email="rodrem@gmail.com",  # Corregido para que coincida con __init__.py
     description="Aplicación de transcripción de audio/video usando OpenAI Whisper",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/rodrigo-m/whisper-app",
+    url="https://github.com/trigoo007/whisper-app",  # Corregido para que coincida con README.md
     packages=find_packages(where="src"),
     package_dir={"": "src"},
     classifiers=[

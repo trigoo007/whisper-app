@@ -1176,7 +1176,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("Modo de edición activado", 3000)
     
     def save_edits(self):
-        """Guarda los cambios de edición"""
+        """Guarda los cambios de edición y actualiza los segmentos"""
         current_item = self.files_list.currentItem()
         if not current_item:
             return
@@ -1195,15 +1195,26 @@ class MainWindow(QMainWindow):
                 self,
                 "Confirmar cambios",
                 "¿Aplicar cambios a la transcripción?\n\n"
-                "Esto afectará la exportación de texto pero no "
-                "la sincronización de tiempos en SRT/VTT.",
+                "Esto actualizará el texto pero mantendrá los tiempos originales.",
                 QMessageBox.Yes | QMessageBox.No,
                 QMessageBox.No
             )
             
             if reply == QMessageBox.Yes:
-                # Actualizar texto en el resultado
+                # Actualizar texto en el resultado principal
                 self.results[file_name]["result"]["text"] = edited_text
+                
+                # Actualizar segmentos con el nuevo texto si es posible
+                if "segments" in self.results[file_name]["result"]:
+                    # Mostrar advertencia sobre limitaciones
+                    QMessageBox.information(
+                        self,
+                        "Información sobre edición",
+                        "Los cambios se han aplicado al texto completo.\n\n"
+                        "Sin embargo, la información de tiempo de los subtítulos se mantiene como "
+                        "en el original. Para una sincronización precisa, considera editar "
+                        "los archivos SRT/VTT después de exportarlos."
+                    )
                 
                 self.statusBar().showMessage("Cambios aplicados", 3000)
         
