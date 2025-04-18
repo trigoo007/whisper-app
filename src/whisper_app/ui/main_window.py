@@ -28,6 +28,7 @@ from whisper_app.ui.dialogs import (
 from whisper_app.utils.ffmpeg_utils import verify_ffmpeg
 from whisper_app.utils.text_utils import extract_keywords
 from whisper_app.utils.language_data import get_stopwords
+from whisper_app.core.realtime_transcriber import RealtimeTranscriber
 
 try:
     import psutil
@@ -320,6 +321,8 @@ class MainWindow(QMainWindow):
         
         # Barra de estado
         self.statusBar()
+        
+        self.setup_dictation_ui()
     
     def setup_menus(self):
         """Configura los menús de la aplicación"""
@@ -399,6 +402,12 @@ class MainWindow(QMainWindow):
         config_action = QAction("&Configuración...", self)
         config_action.triggered.connect(self.show_config_dialog)
         tools_menu.addAction(config_action)
+        
+        # Añadir opción de dictado al menú Herramientas
+        tools_menu.addSeparator()
+        self.dictation_mode_action = QAction("Modo Dictado en Tiempo Real", self)
+        self.dictation_mode_action.triggered.connect(self.toggle_dictation_mode)
+        tools_menu.addAction(self.dictation_mode_action)
         
         # Menú Ayuda
         help_menu = self.menuBar().addMenu("A&yuda")
@@ -1394,3 +1403,245 @@ class MainWindow(QMainWindow):
         
         # Permitir cierre
         event.accept()
+
+    def setup_dictation_ui(self):
+        """Configura componentes de UI para el modo dictado"""
+        self.dictation_widget = QWidget()
+        dictation_layout = QVBoxLayout(self.dictation_widget)
+        dictation_title = QLabel("Modo Dictado en Tiempo Real")
+        font = dictation_title.font()
+        font.setBold(True)
+        font.setPointSize(font.pointSize() + 2)
+        dictation_title.setFont(font)
+        dictation_title.setAlignment(Qt.AlignCenter)
+        dictation_layout.addWidget(dictation_title)
+        dictation_controls = QHBoxLayout()
+        self.start_dictation_btn = QPushButton("Iniciar Dictado")
+        self.start_dictation_btn.setIcon(QIcon.fromTheme("media-record"))
+        self.start_dictation_btn.clicked.connect(self.toggle_dictation)
+        dictation_controls.addWidget(self.start_dictation_btn)
+        self.dictation_pause_btn = QPushButton("Pausar")
+        self.dictation_pause_btn.setEnabled(False)
+        self.dictation_pause_btn.clicked.connect(self.pause_dictation)
+        dictation_controls.addWidget(self.dictation_pause_btn)
+        self.dictation_clear_btn = QPushButton("Limpiar")
+        self.dictation_clear_btn.clicked.connect(self.clear_dictation)
+        dictation_controls.addWidget(self.dictation_clear_btn)
+        dictation_layout.addLayout(dictation_controls)
+        self.dictation_text = QTextEdit()
+        self.dictation_text.setReadOnly(True)
+        self.dictation_text.setPlaceholderText("El texto dictado aparecerá aquí en tiempo real...")
+        dictation_layout.addWidget(self.dictation_text)
+        export_controls = QHBoxLayout()
+        self.dictation_export_txt_btn = QPushButton("Exportar como TXT")
+        self.dictation_export_txt_btn.clicked.connect(lambda: self.export_dictation("txt"))
+        export_controls.addWidget(self.dictation_export_txt_btn)
+        self.dictation_to_editor_btn = QPushButton("Enviar a Editor")
+        self.dictation_to_editor_btn.clicked.connect(self.dictation_to_editor)
+        export_controls.addWidget(self.dictation_to_editor_btn)
+        dictation_layout.addLayout(export_controls)
+        self.dictation_status = QLabel("Listo para dictar")
+        self.dictation_status.setStyleSheet("color: #666; font-style: italic;")
+        dictation_layout.addWidget(self.dictation_status)
+        self.dictation_widget.hide()
+
+    def toggle_dictation_mode(self):
+        """Alterna entre modo normal y modo dictado"""
+        if not hasattr(self, 'dictation_widget'):
+            self.setup_dictation_ui()
+        if self.dictation_widget.isHidden():
+            if not self.transcriber.model:
+                reply = QMessageBox.question(
+                    self,
+                    "Cargar Modelo",
+                    "Se necesita cargar un modelo para el dictado en tiempo real. ¿Cargar ahora?",
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.Yes
+                )
+                if reply == QMessageBox.Yes:
+                    self.load_model()
+                else:
+                    return
+            if not hasattr(self, 'realtime_transcriber'):
+                self.realtime_transcriber = RealtimeTranscriber(self.transcriber, self.config)
+                self.realtime_transcriber.signals.progress.connect(self.update_dictation_text)
+                self.realtime_transcriber.signals.finished.connect(self.dictation_finished)
+                self.realtime_transcriber.signals.error.connect(self.dictation_error)
+                self.recorder.signals.recording_chunk.connect(self.realtime_transcriber.add_audio_chunk)
+            central_layout = self.centralWidget().layout()
+            if not hasattr(self, 'main_content_widget'):
+                for i in range(central_layout.count()):
+                    item = central_layout.itemAt(i)
+                    if item and item.widget() and isinstance(item.widget(), QSplitter):
+                        self.main_content_widget = item.widget()
+                        break
+            if hasattr(self, 'main_content_widget'):
+                self.main_content_widget.hide()
+            dictation_in_layout = False
+            for i in range(central_layout.count()):
+                if central_layout.itemAt(i).widget() == self.dictation_widget:
+                    dictation_in_layout = True
+                    break
+            if not dictation_in_layout:
+                central_layout.addWidget(self.dictation_widget, 1)
+            self.dictation_widget.show()
+            self.setWindowTitle("WhisperApp - Modo Dictado en Tiempo Real")
+            if hasattr(self, 'dictation_mode_action'):
+                self.dictation_mode_action.setText("Volver a Modo Normal")
+        else:
+            if hasattr(self, 'main_content_widget'):
+                if hasattr(self, 'is_dictating') and self.is_dictating:
+                    self.toggle_dictation()
+                self.dictation_widget.hide()
+                self.main_content_widget.show()
+                self.setWindowTitle("WhisperApp - Transcripción de Audio/Video")
+                if hasattr(self, 'dictation_mode_action'):
+                    self.dictation_mode_action.setText("Modo Dictado en Tiempo Real")
+
+    def toggle_dictation(self):
+        """Inicia o detiene el dictado en tiempo real"""
+        if not hasattr(self, 'is_dictating') or not self.is_dictating:
+            if not self.transcriber.model:
+                QMessageBox.warning(
+                    self,
+                    "Modelo no cargado",
+                    "Se necesita cargar un modelo para el dictado en tiempo real."
+                )
+                return
+            success = self.recorder.start_streaming_recording()
+            if not success:
+                QMessageBox.critical(
+                    self,
+                    "Error de Grabación",
+                    "No se pudo iniciar la grabación para dictado.\n\nVerifica tu micrófono y los permisos."
+                )
+                return
+            self.realtime_transcriber.start()
+            self.is_dictating = True
+            self.start_dictation_btn.setText("Detener Dictado")
+            self.dictation_pause_btn.setEnabled(True)
+            self.dictation_status.setText("Dictando... (habla con claridad)")
+            self.dictation_status.setStyleSheet("color: #c00;")
+            self.statusBar().showMessage("Dictado en tiempo real activo", 3000)
+        else:
+            self.realtime_transcriber.stop()
+            self.recorder.stop_recording()
+            self.is_dictating = False
+            self.start_dictation_btn.setText("Iniciar Dictado")
+            self.dictation_pause_btn.setEnabled(False)
+            self.dictation_status.setText("Dictado detenido")
+            self.dictation_status.setStyleSheet("color: #666; font-style: italic;")
+            self.statusBar().showMessage("Dictado detenido", 3000)
+
+    def pause_dictation(self):
+        """Pausa o reanuda el dictado"""
+        if self.dictation_pause_btn.text() == "Pausar":
+            self.dictation_pause_btn.setText("Reanudar")
+            self.dictation_status.setText("Dictado en pausa")
+            self.recorder.stop_recording()
+        else:
+            self.dictation_pause_btn.setText("Pausar")
+            self.dictation_status.setText("Dictado activo")
+            self.recorder.start_streaming_recording()
+
+    def update_dictation_text(self, text):
+        """Actualiza el texto en el área de dictado"""
+        self.dictation_text.setPlainText(text)
+        cursor = self.dictation_text.textCursor()
+        cursor.movePosition(QTextCursor.End)
+        self.dictation_text.setTextCursor(cursor)
+
+    def dictation_finished(self, text):
+        """Gestiona la finalización del dictado"""
+        self.dictation_text.setPlainText(text)
+        self.dictation_status.setText("Dictado completado")
+        self.dictation_status.setStyleSheet("color: #060;")
+        self.dictation_export_txt_btn.setEnabled(True)
+        self.dictation_to_editor_btn.setEnabled(True)
+
+    def dictation_error(self, error_msg):
+        """Gestiona errores durante el dictado"""
+        QMessageBox.critical(
+            self,
+            "Error de Dictado",
+            f"Error durante el dictado en tiempo real:\n\n{error_msg}"
+        )
+        self.is_dictating = False
+        self.start_dictation_btn.setText("Iniciar Dictado")
+        self.dictation_pause_btn.setEnabled(False)
+        self.dictation_status.setText("Error en dictado")
+        self.dictation_status.setStyleSheet("color: #c00;")
+
+    def clear_dictation(self):
+        """Limpia el texto de dictado"""
+        reply = QMessageBox.question(
+            self,
+            "Confirmar",
+            "¿Estás seguro de que deseas limpiar todo el texto dictado?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+        if reply == QMessageBox.Yes:
+            self.dictation_text.clear()
+            if hasattr(self, 'realtime_transcriber'):
+                self.realtime_transcriber.accumulated_text = ""
+
+    def export_dictation(self, format_type="txt"):
+        """Exporta el texto dictado a un archivo"""
+        text = self.dictation_text.toPlainText()
+        if not text:
+            QMessageBox.warning(
+                self,
+                "Sin contenido",
+                "No hay texto para exportar"
+            )
+            return
+        export_dir = self.config.get("export_directory", "")
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Guardar texto dictado",
+            os.path.join(export_dir, "dictado.txt"),
+            "Archivos de texto (*.txt)"
+        )
+        if not file_path:
+            return
+        try:
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write(text)
+            QMessageBox.information(
+                self,
+                "Exportación completada",
+                f"Texto dictado guardado en:\n{file_path}"
+            )
+            self.statusBar().showMessage(f"Dictado exportado como {format_type.upper()}", 3000)
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Error al exportar",
+                f"No se pudo guardar el archivo:\n\n{e}"
+            )
+
+    def dictation_to_editor(self):
+        """Envía el texto dictado al editor de transcripción"""
+        text = self.dictation_text.toPlainText()
+        if not text:
+            QMessageBox.warning(
+                self,
+                "Sin contenido",
+                "No hay texto para enviar al editor"
+            )
+            return
+        if self.text_edit.toPlainText():
+            reply = QMessageBox.question(
+                self,
+                "Confirmar acción",
+                "¿Deseas reemplazar el texto actual en el editor de transcripción?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No
+            )
+            if reply != QMessageBox.Yes:
+                return
+        self.toggle_dictation_mode()
+        self.text_edit.setPlainText(text)
+        self.enable_editing()
+        self.statusBar().showMessage("Texto dictado enviado al editor", 3000)

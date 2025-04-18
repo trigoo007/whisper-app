@@ -22,6 +22,7 @@ class RecorderSignals(QObject):
     recording_error = pyqtSignal(str)  # mensaje de error
     recording_level = pyqtSignal(float)  # nivel de audio (0-1)
     recording_time = pyqtSignal(int)  # tiempo en segundos
+    recording_chunk = pyqtSignal(np.ndarray)  # fragmento de audio en tiempo real
 
 class AudioRecorder(QObject):
     """Clase para la grabación de audio desde micrófono"""
@@ -42,6 +43,7 @@ class AudioRecorder(QObject):
         self.sample_rate = self.config.get("sample_rate", 16000)
         self.channels = self.config.get("channels", 1)
         self.stream = None
+        self.is_streaming = False  # Nueva bandera para modo streaming
         
         # Timer para actualizar tiempo de grabación
         self.timer = QTimer()
@@ -242,3 +244,68 @@ class AudioRecorder(QObject):
             bool: True si hay grabación en curso, False en caso contrario
         """
         return self.is_recording
+
+    def start_streaming_recording(self):
+        """
+        Inicia grabación continua con envío de fragmentos en tiempo real.
+        Similar a start_recording() pero optimizado para streaming.
+        Returns:
+            bool: True si se inició correctamente, False en caso contrario
+        """
+        if self.is_recording:
+            logger.warning("Ya hay una grabación en curso")
+            return False
+        try:
+            # Reiniciar estado
+            self.audio_data = []
+            self.is_recording = True
+            self.is_streaming = True  # Nueva bandera para modo streaming
+            self.recording_seconds = 0
+            # Tamaño del fragmento en muestras (20ms a 16kHz = 320 muestras)
+            self.chunk_size = int(0.02 * self.sample_rate)
+            logger.info("Iniciando grabación en modo streaming...")
+            # Función de callback modificada para envío de fragmentos
+            def audio_callback(indata, frames, time, status):
+                """Callback para capturar audio y emitir fragmentos"""
+                if status:
+                    logger.warning(f"Error de estado en grabación: {status}")
+                if self.is_recording:
+                    # Guardar datos de audio
+                    self.audio_data.append(indata.copy())
+                    # Emitir señal con el fragmento actual para procesamiento en tiempo real
+                    if hasattr(self.signals, 'recording_chunk'):
+                        self.signals.recording_chunk.emit(indata.flatten())
+                    # Calcular y emitir nivel de audio
+                    if indata.size > 0:
+                        level = float(np.max(np.abs(indata)))
+                        self.signals.recording_level.emit(level)
+            # Configurar y abrir stream de audio
+            self.stream = sd.InputStream(
+                device=self.device_id,
+                channels=self.channels,
+                samplerate=self.sample_rate,
+                dtype='int16',
+                callback=audio_callback,
+                blocksize=self.chunk_size
+            )
+            self.stream.start()
+            # Iniciar timer para actualizar tiempo
+            self.timer.start(1000)  # cada segundo
+            self.signals.recording_started.emit()
+            logger.info("Grabación en modo streaming iniciada correctamente")
+            return True
+        except Exception as e:
+            self.is_recording = False
+            self.is_streaming = False
+            error_msg = f"Error al iniciar grabación en streaming: {e}"
+            logger.error(error_msg)
+            self.signals.recording_error.emit(error_msg)
+            return False
+
+    def is_streaming(self):
+        """
+        Verifica si hay una grabación en modo streaming activa
+        Returns:
+            bool: True si hay grabación en streaming, False en caso contrario
+        """
+        return hasattr(self, 'is_streaming') and self.is_streaming

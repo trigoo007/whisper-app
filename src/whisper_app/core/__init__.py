@@ -14,3 +14,4 @@ from whisper_app.core.config_manager import ConfigManager
 from whisper_app.core.transcriber import Transcriber
 from whisper_app.core.recorder import AudioRecorder
 from whisper_app.core.file_manager import FileManager
+from whisper_app.core.realtime_transcriber import RealtimeTranscriber
