@@ -91,6 +91,15 @@ class FileManager:
         
         return f"{all_filter};;{audio_filter};;{video_filter};;Todos los archivos (*.*)"
     
+    def _has_enough_disk_space(self, path, min_bytes=100*1024*1024):
+        """Verifica si hay suficiente espacio libre en disco (por defecto 100MB)"""
+        try:
+            total, used, free = shutil.disk_usage(os.path.dirname(os.path.abspath(path)))
+            return free > min_bytes
+        except Exception as e:
+            logger.warning(f"No se pudo verificar el espacio en disco: {e}")
+            return True  # No bloquear si no se puede verificar
+
     def import_file(self, file_path, normalize_audio=False):
         """
         Importa un archivo para procesamiento
@@ -113,6 +122,11 @@ class FileManager:
         # Verificamos directamente si FFMPEG está disponible
         if not verify_ffmpeg():
             logger.error("FFMPEG no encontrado, es necesario para procesar archivos")
+            return None
+        
+        # Verificar espacio antes de crear temporales
+        if not self._has_enough_disk_space(file_path):
+            logger.error("Espacio en disco insuficiente para importar archivo")
             return None
         
         try:
@@ -181,6 +195,11 @@ class FileManager:
             # Generar nombre de archivo basado en la fecha y hora
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             base_path = os.path.join(export_dir, f"transcripcion_{timestamp}")
+        
+        # Verificar espacio antes de exportar
+        if not self._has_enough_disk_space(base_path):
+            logger.error("Espacio en disco insuficiente para exportar transcripción")
+            return {}
         
         # Asegurar que el directorio existe
         os.makedirs(os.path.dirname(base_path), exist_ok=True)

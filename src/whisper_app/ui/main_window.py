@@ -12,7 +12,7 @@ from PyQt5.QtWidgets import (
     QProgressBar, QTextEdit, QMessageBox, QFileDialog, QAction,
     QMenu, QStatusBar, QToolBar, QCheckBox, QShortcut, QApplication
 )
-from PyQt5.QtCore import Qt, QSize, QThread, pyqtSlot, pyqtSignal
+from PyQt5.QtCore import Qt, QSize, QThread, pyqtSlot, pyqtSignal, QObject
 from PyQt5.QtGui import QIcon, QTextCursor, QKeySequence
 
 from whisper_app.core.transcriber import Transcriber
@@ -28,6 +28,11 @@ from whisper_app.ui.dialogs import (
 from whisper_app.utils.ffmpeg_utils import verify_ffmpeg
 from whisper_app.utils.text_utils import extract_keywords
 from whisper_app.utils.language_data import get_stopwords
+
+try:
+    import psutil
+except ImportError:
+    psutil = None
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +68,40 @@ class ModelLoaderThread(QThread):
         self.transcriber.signals.progress.connect(self.progress.emit)
         success = self.transcriber.load_model(self.model_name)
         self.finished.emit(success, self.model_name)
+
+class ImportWorker(QThread):
+    finished = pyqtSignal(dict, str, bool, str)  # file_info, file_path, is_recording, error
+    def __init__(self, file_manager, file_path, normalize, is_recording):
+        super().__init__()
+        self.file_manager = file_manager
+        self.file_path = file_path
+        self.normalize = normalize
+        self.is_recording = is_recording
+        self.error = None
+        self.file_info = None
+    def run(self):
+        try:
+            self.file_info = self.file_manager.import_file(self.file_path, self.normalize)
+        except Exception as e:
+            self.error = str(e)
+        self.finished.emit(self.file_info, self.file_path, self.is_recording, self.error)
+
+class ExportWorker(QThread):
+    finished = pyqtSignal(dict, str, list, str)  # exported, file_path, formats, error
+    def __init__(self, file_manager, transcription, file_path, formats):
+        super().__init__()
+        self.file_manager = file_manager
+        self.transcription = transcription
+        self.file_path = file_path
+        self.formats = formats
+        self.exported = None
+        self.error = None
+    def run(self):
+        try:
+            self.exported = self.file_manager.export_transcription(self.transcription, self.file_path, self.formats)
+        except Exception as e:
+            self.error = str(e)
+        self.finished.emit(self.exported, self.file_path, self.formats, self.error)
 
 class MainWindow(QMainWindow):
     """Ventana principal de la aplicación"""
@@ -469,83 +508,67 @@ class MainWindow(QMainWindow):
             file_path (str): Ruta al archivo
             is_recording (bool): Si es un archivo de grabación
         """
-        # Verificar FFMPEG primero
         if not verify_ffmpeg():
             QMessageBox.critical(
                 self,
                 "Error - FFMPEG no encontrado",
-                "FFMPEG es necesario para procesar archivos multimedia.\n\n"
-                "Por favor, instálalo antes de continuar."
+                "FFMPEG es necesario para procesar archivos multimedia.\n\nPor favor, instálalo antes de continuar."
             )
             return
-        
-        try:
-            # Obtener información del archivo
-            normalize = self.config.get("normalize_audio", False)
-            try:
-                file_info = self.file_manager.import_file(file_path, normalize)
-            except Exception as e:
-                logger.error(f"Error al normalizar audio: {e}")
-                QMessageBox.critical(
-                    self,
-                    "Error de normalización",
-                    f"Ocurrió un error al normalizar el audio con FFMPEG:\n\n{e}"
-                )
-                return
-            
-            if not file_info:
-                QMessageBox.warning(
-                    self,
-                    "Error al importar",
-                    f"No se pudo importar el archivo: {file_path}"
-                )
-                return
-            
-            # Añadir a la lista
-            name = file_info['name']
-            if is_recording:
-                # Usar nombre más descriptivo para grabaciones
-                timestamp = file_info['created'].strftime("%Y%m%d_%H%M%S")
-                name = f"Grabación_{timestamp}.wav"
-                file_info['name'] = name
-            
-            # Evitar nombres duplicados
-            base_name = name
-            counter = 1
-            while name in self.files:
-                root, ext = os.path.splitext(base_name)
-                name = f"{root}_{counter}{ext}"
-                counter += 1
-                file_info['name'] = name
-            
-            # Registrar archivo
-            self.files[name] = file_info
-            
-            # Añadir a la lista visual
-            item = QListWidgetItem(name)
-            self.files_list.addItem(item)
-            
-            # Seleccionar el nuevo archivo
-            self.files_list.setCurrentItem(item)
-            
-            # Habilitar transcripción si hay modelo cargado
-            if self.transcriber.model:
-                self.transcribe_btn.setEnabled(True)
-            
-            logger.info(f"Archivo importado: {name}")
-            self.statusBar().showMessage(f"Archivo importado: {name}", 3000)
-        
-        except Exception as e:
-            logger.error(f"Error importando archivo: {e}")
-            QMessageBox.critical(
-                self,
-                "Error",
-                f"Error al importar archivo: {e}"
-            )
+        normalize = self.config.get("normalize_audio", False)
+        self.import_btn.setEnabled(False)
+        self.status_label.setText(f"Importando '{os.path.basename(file_path)}'...")
+        self.progress_bar.setRange(0, 0)
+        self.import_worker = ImportWorker(self.file_manager, file_path, normalize, is_recording)
+        self.import_worker.finished.connect(self.on_import_finished)
+        self.import_worker.start()
+
+    def on_import_finished(self, file_info, file_path, is_recording, error):
+        self.import_btn.setEnabled(True)
+        self.progress_bar.setRange(0, 100)
+        self.status_label.setText("Listo")
+        if error:
+            logger.error(f"Error importando archivo: {error}")
+            QMessageBox.critical(self, "Error", f"Error al importar archivo: {error}")
+            return
+        if not file_info:
+            QMessageBox.warning(self, "Error al importar", f"No se pudo importar el archivo: {file_path}")
+            return
+        name = file_info['name']
+        if is_recording:
+            timestamp = file_info['created'].strftime("%Y%m%d_%H%M%S")
+            name = f"Grabación_{timestamp}.wav"
+            file_info['name'] = name
+        base_name = name
+        counter = 1
+        while name in self.files:
+            root, ext = os.path.splitext(base_name)
+            name = f"{root}_{counter}{ext}"
+            counter += 1
+            file_info['name'] = name
+        self.files[name] = file_info
+        item = QListWidgetItem(name)
+        self.files_list.addItem(item)
+        self.files_list.setCurrentItem(item)
+        if self.transcriber.model:
+            self.transcribe_btn.setEnabled(True)
+        logger.info(f"Archivo importado: {name}")
+        self.statusBar().showMessage(f"Archivo importado: {name}", 3000)
     
     def load_model(self):
         """Carga el modelo seleccionado en un hilo y muestra el diálogo de descarga real"""
         model_name = self.model_combo.currentText()
+        # Chequeo de memoria antes de modelos grandes
+        if model_name in ["medium", "large"] and psutil is not None:
+            ram_gb = psutil.virtual_memory().available / (1024**3)
+            min_ram = 3 if model_name == "medium" else 6
+            if ram_gb < min_ram:
+                logger.warning(f"RAM disponible insuficiente para el modelo '{model_name}': {ram_gb:.1f} GB (recomendado: {min_ram} GB)")
+                QMessageBox.warning(
+                    self,
+                    "Advertencia de memoria",
+                    f"La memoria RAM disponible es baja ({ram_gb:.1f} GB).\n\nEl modelo '{model_name}' puede requerir al menos {min_ram} GB de RAM libre.\n\nLa aplicación podría fallar o volverse inestable."
+                )
         self.status_label.setText(f"Cargando modelo '{model_name}'...")
         self.progress_bar.setValue(10)
         self.load_model_btn.setEnabled(False)
@@ -663,6 +686,22 @@ class MainWindow(QMainWindow):
     
     def transcribe(self):
         """Inicia el proceso de transcripción"""
+        # Chequeo de memoria antes de archivos largos
+        current_item = self.files_list.currentItem()
+        if current_item:
+            file_name = current_item.text()
+            if file_name in self.files:
+                file_info = self.files[file_name]
+                duration = file_info.get('duration', 0)
+                if duration > 3600 and psutil is not None:  # Más de 1 hora
+                    ram_gb = psutil.virtual_memory().available / (1024**3)
+                    if ram_gb < 4:
+                        logger.warning(f"RAM disponible baja para transcripción larga: {ram_gb:.1f} GB")
+                        QMessageBox.warning(
+                            self,
+                            "Advertencia de memoria",
+                            f"La memoria RAM disponible es baja ({ram_gb:.1f} GB).\n\nTranscribir archivos muy largos puede requerir al menos 4 GB de RAM libre.\n\nLa aplicación podría fallar o volverse inestable."
+                        )
         if not self.transcriber.model:
             # Intentar cargar modelo automáticamente
             self.load_model()
@@ -1139,40 +1178,38 @@ class MainWindow(QMainWindow):
         if len(formats) > 1:
             file_path = os.path.splitext(file_path)[0]
         
-        try:
-            # Exportar
-            exported = self.file_manager.export_transcription(
-                transcription,
-                file_path,
-                formats
-            )
-            
-            if exported:
-                formats_str = ", ".join(formats)
-                exported_files = ", ".join(exported.values())
-                
-                QMessageBox.information(
-                    self,
-                    "Exportación completada",
-                    f"Transcripción exportada en formato(s): {formats_str}\n\n"
-                    f"Archivos:\n{exported_files}"
-                )
-                
-                self.statusBar().showMessage(f"Exportación completada: {formats_str}", 3000)
-            else:
-                QMessageBox.warning(
-                    self,
-                    "Error de exportación",
-                    "No se pudo exportar la transcripción"
-                )
-        
-        except Exception as e:
-            logger.error(f"Error al exportar: {e}")
-            QMessageBox.critical(
+        self.export_txt_btn.setEnabled(False)
+        self.export_srt_btn.setEnabled(False)
+        self.export_vtt_btn.setEnabled(False)
+        self.export_all_btn.setEnabled(False)
+        self.status_label.setText("Exportando transcripción...")
+        self.progress_bar.setRange(0, 0)
+        self.export_worker = ExportWorker(self.file_manager, transcription, file_path, formats)
+        self.export_worker.finished.connect(self.on_export_finished)
+        self.export_worker.start()
+
+    def on_export_finished(self, exported, file_path, formats, error):
+        self.export_txt_btn.setEnabled(True)
+        self.export_srt_btn.setEnabled(True)
+        self.export_vtt_btn.setEnabled(True)
+        self.export_all_btn.setEnabled(True)
+        self.progress_bar.setRange(0, 100)
+        self.status_label.setText("Listo")
+        if error:
+            logger.error(f"Error al exportar: {error}")
+            QMessageBox.critical(self, "Error", f"Error al exportar transcripción: {error}")
+            return
+        if exported:
+            formats_str = ", ".join(formats)
+            exported_files = ", ".join(exported.values())
+            QMessageBox.information(
                 self,
-                "Error",
-                f"Error al exportar transcripción: {e}"
+                "Exportación completada",
+                f"Transcripción exportada en formato(s): {formats_str}\n\nArchivos:\n{exported_files}"
             )
+            self.statusBar().showMessage(f"Exportación completada: {formats_str}", 3000)
+        else:
+            QMessageBox.warning(self, "Error de exportación", "No se pudo exportar la transcripción")
     
     def enable_editing(self):
         """Habilita edición de transcripción"""
