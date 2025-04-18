@@ -27,6 +27,7 @@ from whisper_app.ui.dialogs import (
 )
 from whisper_app.utils.ffmpeg_utils import verify_ffmpeg
 from whisper_app.utils.text_utils import extract_keywords
+from whisper_app.utils.language_data import get_stopwords
 
 logger = logging.getLogger(__name__)
 
@@ -745,7 +746,11 @@ class MainWindow(QMainWindow):
         duration_str = f"{int(duration // 60)}:{int(duration % 60):02}"
         
         # Extraer palabras clave usando el idioma detectado
-        lang_code = language if language != "desconocido" else "es"
+        lang_code = language if language and language != "desconocido" else "es"
+        # Validar si el idioma está soportado por get_stopwords
+        if not get_stopwords(lang_code):
+            logger.warning(f"Idioma '{lang_code}' no soportado para palabras clave, usando 'es' como fallback.")
+            lang_code = "es"
         keywords = extract_keywords(transcription["text"], language=lang_code)
         keywords_str = ", ".join(keywords)
         

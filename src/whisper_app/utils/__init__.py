@@ -35,7 +35,7 @@ from whisper_app.utils.text_utils import (
     format_timestamp_vtt,
     clean_text,
     merge_segments,
-    detect_speakers,
+    label_segments_by_pause,
     split_long_segments,
     extract_keywords
 )

@@ -214,18 +214,21 @@ def merge_segments(segments, max_chars=120, max_duration=5.0):
     
     return merged
 
-def assign_speaker_labels_simple(segments, num_speakers=2):
+def label_segments_by_pause(segments, num_speakers=2):
     """
-    Asigna etiquetas de hablante de forma heurística basada en pausas largas entre segmentos.
-    Nota: Esto NO es diarización real, solo una simulación simple para propósitos visuales.
-    Para diarización real, se recomienda usar bibliotecas como pyannote.audio.
+    Asigna etiquetas de hablante basándose únicamente en pausas entre segmentos.
+    
+    IMPORTANTE: Esta NO es una verdadera diarización. Es sólo una aproximación
+    heurística basada en pausas que puede ser útil para visualización básica.
+    Para diarización real, se recomienda utilizar bibliotecas especializadas
+    como pyannote.audio.
 
     Args:
         segments (list): Lista de segmentos de Whisper
         num_speakers (int): Número estimado de hablantes
 
     Returns:
-        list: Segmentos con etiquetas de hablante
+        list: Segmentos con etiquetas de hablante simples
     """
     if not segments:
         return []
@@ -256,9 +259,8 @@ def assign_speaker_labels_simple(segments, num_speakers=2):
     
     return result
 
-# Mantener el nombre antiguo como alias para compatibilidad
-
-detect_speakers = assign_speaker_labels_simple
+# Mantener el alias por compatibilidad, pero marcar como obsoleto
+detect_speakers = label_segments_by_pause  # OBSOLETO: Usar label_segments_by_pause
 
 def split_long_segments(segments, max_chars=120, max_duration=5.0):
     """

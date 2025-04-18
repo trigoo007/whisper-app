@@ -362,9 +362,11 @@ class Transcriber(QObject):
                     seg["end"] += offset
                 
                 results.append(result)
-                # Mejorar precisión del offset: usar el final real del último segmento
+                # Mejorar precisión del offset: evitar solapamientos o huecos
                 if result["segments"]:
-                    offset = result["segments"][-1]["end"]
+                    last_end = result["segments"][-1]["end"]
+                    segment_duration = get_file_duration(segment) or max_duration
+                    offset = max(last_end, offset + segment_duration)
                 else:
                     offset += max_duration
             

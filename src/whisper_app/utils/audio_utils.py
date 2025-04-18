@@ -16,11 +16,13 @@ try:
     import soundfile as sf
 except ImportError:
     sf = None
+    logging.warning("El módulo 'soundfile' no está instalado. Algunas funciones de audio pueden ser limitadas o menos precisas.")
 
 try:
     from scipy import signal
 except ImportError:
     signal = None
+    logging.warning("El módulo 'scipy' no está instalado. El remuestreo de audio será menos preciso.")
 
 from whisper_app.utils.ffmpeg_utils import verify_ffmpeg, convert_to_wav
 
