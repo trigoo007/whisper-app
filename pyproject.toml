@@ -50,7 +50,7 @@ whisper-app-gui = "whisper_app.app:main"
 
 [project.urls]
 "Homepage" = "https://github.com/trigoo007/whisper-app"
-"Bug Tracker" = "https://github.com/tu-usuario/whisper-app/issues"
+"Bug Tracker" = "https://github.com/trigoo007/whisper-app/issues"
 
 # PyInstaller configuración
 [tool.pyinstaller]

@@ -53,12 +53,15 @@ def main():
         
         # Configurar internacionalización
         translator = QTranslator()
-        locale = config.get('language', QLocale.system().name())
+        locale = config.get('ui_language', QLocale.system().name())
+        
+        # Corregir ruta de los archivos de traducción
+        from whisper_app.resources import TRANSLATIONS_PATH
         translator_path = os.path.join(
-            os.path.dirname(__file__),
-            'resources/translations',
+            TRANSLATIONS_PATH,
             f"{locale}.qm"
         )
+        
         if os.path.exists(translator_path):
             translator.load(translator_path)
             app.installTranslator(translator)
