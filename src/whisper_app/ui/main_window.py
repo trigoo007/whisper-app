@@ -23,9 +23,10 @@ from whisper_app.ui.dialogs import (
     AudioDeviceDialog, 
     AdvancedOptionsDialog, 
     AboutDialog,
-    ModelDownloadDialog
+    ModelDownloadDialog,
+    get_ffmpeg_install_instructions
 )
-from whisper_app.utils.ffmpeg_utils import verify_ffmpeg
+from whisper_app.utils.ffmpeg_utils import verify_ffmpeg, verify_ffmpeg_components
 from whisper_app.utils.text_utils import extract_keywords
 from whisper_app.utils.language_data import get_stopwords
 from whisper_app.core.realtime_transcriber import RealtimeTranscriber
@@ -517,11 +518,12 @@ class MainWindow(QMainWindow):
             file_path (str): Ruta al archivo
             is_recording (bool): Si es un archivo de grabación
         """
-        if not verify_ffmpeg():
+        if not verify_ffmpeg_components():
+            instructions = get_ffmpeg_install_instructions()
             QMessageBox.critical(
                 self,
-                "Error - FFMPEG no encontrado",
-                "FFMPEG es necesario para procesar archivos multimedia.\n\nPor favor, instálalo antes de continuar."
+                "Error - FFMPEG/ffprobe no encontrados",
+                "FFMPEG y/o ffprobe son necesarios para procesar archivos multimedia.\n\n" + instructions
             )
             return
         normalize = self.config.get("normalize_audio", False)

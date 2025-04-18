@@ -1738,3 +1738,29 @@ class ModelDownloadDialog(QDialog):
         self.cancelled = True
         self.timer.stop()
         self.reject()
+
+def get_ffmpeg_install_instructions():
+    """
+    Devuelve instrucciones básicas para instalar FFMPEG y ffprobe según el sistema operativo.
+    """
+    if sys.platform.startswith("win"):
+        return (
+            "Descarga FFMPEG desde https://ffmpeg.org/download.html o https://www.gyan.dev/ffmpeg/builds/\n"
+            "Descomprime el archivo ZIP y añade la carpeta 'bin' al PATH del sistema.\n"
+            "Asegúrate de que 'ffmpeg.exe' y 'ffprobe.exe' estén accesibles desde la terminal."
+        )
+    elif sys.platform == "darwin":
+        return (
+            "En macOS puedes instalar FFMPEG y ffprobe usando Homebrew:\n"
+            "    brew install ffmpeg\n"
+            "O descarga un binario desde https://evermeet.cx/ffmpeg/\n"
+            "Asegúrate de que 'ffmpeg' y 'ffprobe' estén en el PATH."
+        )
+    else:
+        return (
+            "En Linux puedes instalar FFMPEG y ffprobe usando tu gestor de paquetes:\n"
+            "    sudo apt install ffmpeg\n"
+            "    # o\n"
+            "    sudo dnf install ffmpeg\n"
+            "Asegúrate de que 'ffmpeg' y 'ffprobe' estén en el PATH."
+        )

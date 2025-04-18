@@ -103,6 +103,33 @@ def find_ffmpeg():
     # No se encontró FFMPEG
     return ""
 
+def verify_ffprobe():
+    """
+    Verifica si ffprobe está disponible en el sistema
+    Returns:
+        bool: True si ffprobe está disponible, False si no
+    """
+    try:
+        subprocess.run(
+            ["ffprobe", "-version"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=True
+        )
+        logger.debug("ffprobe verificado correctamente")
+        return True
+    except (subprocess.SubprocessError, FileNotFoundError):
+        logger.warning("ffprobe no encontrado en el sistema")
+        return False
+
+def verify_ffmpeg_components():
+    """
+    Verifica que tanto ffmpeg como ffprobe estén disponibles
+    Returns:
+        bool: True si ambos están disponibles, False si no
+    """
+    return verify_ffmpeg() and verify_ffprobe()
+
 def get_file_info(file_path):
     """
     Obtiene información de un archivo multimedia usando FFMPEG
@@ -113,8 +140,8 @@ def get_file_info(file_path):
     Returns:
         dict: Información del archivo o None si hay error
     """
-    if not verify_ffmpeg():
-        logger.error("FFMPEG no encontrado, no se puede obtener información del archivo")
+    if not verify_ffmpeg_components():
+        logger.error("FFMPEG o ffprobe no encontrados, no se puede obtener información del archivo")
         return None
     
     if not os.path.exists(file_path):

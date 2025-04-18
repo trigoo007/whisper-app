@@ -34,6 +34,9 @@ dev = [
     "isort==5.12.0",
     "pyinstaller==6.3.0"
 ]
+cuda = ["torch==2.1.2+cu118"]
+cpu = ["torch==2.1.2+cpu"]
+# rocm = ["torch==2.1.2+rocm5.4.2"]
 
 [project.scripts]
 whisper-app = "whisper_app.app:main"

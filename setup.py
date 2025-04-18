@@ -4,10 +4,31 @@
 Script de instalación para WhisperApp
 """
 
+import subprocess
+from setuptools.command.install import install
+from setuptools.command.develop import develop
 from setuptools import setup, find_packages
 
 with open("README.md", "r", encoding="utf-8") as fh:
     long_description = fh.read()
+
+class CompileTranslationsCommand:
+    def run_command(self):
+        try:
+            print("Compilando archivos de traducción (.ts -> .qm)...")
+            subprocess.run(["python", "compile_translations.py"], check=True)
+        except Exception as e:
+            print(f"[ADVERTENCIA] No se pudieron compilar las traducciones: {e}")
+
+class InstallWithTranslations(install, CompileTranslationsCommand):
+    def run(self):
+        self.run_command()
+        super().run()
+
+class DevelopWithTranslations(develop, CompileTranslationsCommand):
+    def run(self):
+        self.run_command()
+        super().run()
 
 setup(
     name="whisper-app",
@@ -52,7 +73,14 @@ setup(
         ],
         "translations": [
             "PyQt5-tools>=5.15.0"
-        ]
+        ],
+        "cuda": ["torch==2.1.2+cu118"],
+        "cpu": ["torch==2.1.2+cpu"]
+        # "rocm": ["torch==2.1.2+rocm5.4.2"]
+    },
+    cmdclass={
+        'install': InstallWithTranslations,
+        'develop': DevelopWithTranslations
     },
     entry_points={
         "console_scripts": [
