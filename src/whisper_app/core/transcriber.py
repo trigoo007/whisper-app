@@ -13,6 +13,7 @@ import subprocess
 import whisper
 from PyQt5.QtCore import QObject, pyqtSignal
 
+# Añadir importación directa de verify_ffmpeg
 from whisper_app.utils.ffmpeg_utils import verify_ffmpeg, get_file_duration
 from whisper_app.utils.audio_utils import apply_vad
 
@@ -124,7 +125,7 @@ class Transcriber(QObject):
         # Estimar tiempo basado en duración y modelo
         try:
             duration = get_file_duration(file_path)
-            if duration:
+            if duration is not None:  # Verificar que duration no es None antes de usarlo
                 # Estimación aproximada: más lento con modelos más grandes
                 model_factor = {"tiny": 0.5, "base": 1.0, "small": 2.0, 
                                 "medium": 3.0, "large": 5.0}
@@ -143,20 +144,20 @@ class Transcriber(QObject):
         large_file = False
         max_duration = 600  # 10 minutos
         
-        if duration and duration > max_duration:
+        if duration is not None and duration > max_duration:  # Verificar que duration no es None
             large_file = True
             self.signals.progress.emit(
                 10, 
                 f"Archivo grande ({duration/60:.1f} min). Se procesará por segmentos."
             )
         
+        processed_file = file_path
         try:
             # Configurar opciones para Whisper
             options = self._prepare_whisper_options(language)
             
             # Aplicar VAD si está habilitado
             use_vad = self.config.get("use_vad", False)
-            processed_file = file_path
             
             if use_vad:
                 self.signals.progress.emit(15, "Aplicando detección de voz (VAD)...")
@@ -176,6 +177,12 @@ class Transcriber(QObject):
             if self.cancel_requested:
                 logger.info("Transcripción cancelada por el usuario")
                 self.signals.cancelled.emit()
+                # Limpiar archivo temporal si se usó VAD
+                if use_vad and processed_file != file_path and os.path.exists(processed_file):
+                    try:
+                        os.unlink(processed_file)
+                    except Exception as e:
+                        logger.warning(f"Error al eliminar archivo temporal: {e}")
                 return None
             
             elapsed = time.time() - start_time
@@ -215,13 +222,6 @@ class Transcriber(QObject):
             self.signals.progress.emit(100, "Proceso completado con éxito")
             self.signals.finished.emit(output)
             
-            # Limpiar archivo temporal si se usó VAD
-            if use_vad and processed_file != file_path and os.path.exists(processed_file):
-                try:
-                    os.unlink(processed_file)
-                except Exception as e:
-                    logger.warning(f"Error al eliminar archivo temporal: {e}")
-            
             return output
             
         except Exception as e:
@@ -229,6 +229,13 @@ class Transcriber(QObject):
             logger.error(error_msg)
             self.signals.error.emit(error_msg)
             return None
+        finally:
+            # Limpiar archivo temporal si se usó VAD
+            if use_vad and processed_file != file_path and os.path.exists(processed_file):
+                try:
+                    os.unlink(processed_file)
+                except Exception as e:
+                    logger.warning(f"Error al eliminar archivo temporal: {e}")
     
     def _prepare_whisper_options(self, language=None):
         """
@@ -276,6 +283,10 @@ class Transcriber(QObject):
         """
         # Obtener duración total
         duration = get_file_duration(file_path)
+        if duration is None:
+            # Si no se puede determinar la duración, usar un valor predeterminado
+            duration = max_duration * 2
+            logger.warning(f"No se pudo determinar la duración, usando valor predeterminado: {duration}s")
         
         # Crear directorio temporal
         temp_dir = tempfile.mkdtemp(prefix="whisper_segments_")

@@ -11,6 +11,7 @@ import logging
 from datetime import datetime
 from pathlib import Path
 
+# Añadir importación directa de verify_ffmpeg
 from whisper_app.utils.ffmpeg_utils import (
     verify_ffmpeg, 
     get_file_duration, 
@@ -109,6 +110,7 @@ class FileManager:
             logger.error(f"Formato de archivo no soportado: {file_path}")
             return None
         
+        # Verificamos directamente si FFMPEG está disponible
         if not verify_ffmpeg():
             logger.error("FFMPEG no encontrado, es necesario para procesar archivos")
             return None
@@ -127,13 +129,18 @@ class FileManager:
             # Añadir a archivos recientes
             self.config.add_recent_file(file_path)
             
+            # Obtener duración de manera segura
+            duration = get_file_duration(file_path)
+            if duration is None:
+                duration = 0.0  # Valor predeterminado si no se puede determinar
+            
             # Crear y devolver información
             return {
                 'original_path': file_path,
                 'processed_path': processed_path,
                 'name': os.path.basename(file_path),
                 'size': os.path.getsize(file_path),
-                'duration': get_file_duration(file_path),
+                'duration': duration,
                 'created': datetime.fromtimestamp(os.path.getctime(file_path)),
                 'modified': datetime.fromtimestamp(os.path.getmtime(file_path)),
                 'info': file_info
@@ -211,6 +218,7 @@ class FileManager:
         Returns:
             str: Ruta al archivo normalizado
         """
+        temp_file = None
         try:
             # Convertir a WAV con parámetros óptimos para Whisper
             # (16kHz, mono, normalizado)
@@ -231,6 +239,12 @@ class FileManager:
             return normalized_path
         except Exception as e:
             logger.warning(f"Error al normalizar audio: {e}, usando original")
+            # Limpiar archivo temporal en caso de error
+            if temp_file and os.path.exists(temp_file):
+                try:
+                    os.unlink(temp_file)
+                except Exception:
+                    pass
             return file_path
     
     def cleanup_temp_files(self):

@@ -10,7 +10,7 @@ from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
     QLabel, QPushButton, QComboBox, QListWidget, QListWidgetItem,
     QProgressBar, QTextEdit, QMessageBox, QFileDialog, QAction,
-    QMenu, QStatusBar, QToolBar, QCheckBox, QShortcut
+    QMenu, QStatusBar, QToolBar, QCheckBox, QShortcut, QApplication
 )
 from PyQt5.QtCore import Qt, QSize, QThread, pyqtSlot
 from PyQt5.QtGui import QIcon, QTextCursor, QKeySequence
@@ -68,6 +68,7 @@ class MainWindow(QMainWindow):
         self.files = {}  # {name: file_info}
         self.results = {}  # {name: transcription_result}
         self.current_file = None
+        self.original_text = ""  # Para edición
         
         # Configurar UI
         self.setup_ui()
@@ -1266,7 +1267,7 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         """Gestiona cierre de la aplicación"""
         # Verificar si hay procesos activos
-        if self.transcription_thread and self.transcription_thread.isRunning():
+        if self.transcription_thread is not None and self.transcription_thread.isRunning():
             reply = QMessageBox.question(
                 self,
                 "Confirmar salida",

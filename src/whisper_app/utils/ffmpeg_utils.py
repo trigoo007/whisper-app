@@ -173,8 +173,7 @@ def get_file_info(file_path):
                 stream_info.update({
                     "width": stream.get("width"),
                     "height": stream.get("height"),
-                    "frame_rate": eval(stream.get("r_frame_rate", "0/1"))
-                    if "/" in stream.get("r_frame_rate", "0/1") else 0
+                    "frame_rate": parse_frame_rate(stream.get("r_frame_rate", "0/1"))
                 })
             
             output["streams"].append(stream_info)
@@ -184,6 +183,25 @@ def get_file_info(file_path):
     except Exception as e:
         logger.error(f"Error al obtener información del archivo: {e}")
         return None
+
+def parse_frame_rate(rate_str):
+    """
+    Parsea una cadena de velocidad de fotogramas (ej: "30000/1001") de forma segura
+    
+    Args:
+        rate_str (str): Cadena con formato de fracción
+    
+    Returns:
+        float: Velocidad de fotogramas
+    """
+    try:
+        if "/" in rate_str:
+            numerator, denominator = rate_str.split("/")
+            return float(numerator) / float(denominator)
+        else:
+            return float(rate_str)
+    except (ValueError, ZeroDivisionError):
+        return 0.0
 
 def get_file_duration(file_path):
     """

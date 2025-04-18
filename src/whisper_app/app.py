@@ -7,18 +7,33 @@ WhisperApp - Aplicación de transcripción de audio/video utilizando OpenAI Whis
 import sys
 import os
 import logging
+from pathlib import Path
 from PyQt5.QtWidgets import QApplication
 from PyQt5.QtCore import QTranslator, QLocale
 
 from whisper_app.ui.main_window import MainWindow
 from whisper_app.core.config_manager import ConfigManager
 
+# Configurar logging en ubicación estándar
+logs_dir = None
+if os.name == 'nt':  # Windows
+    logs_dir = os.path.join(os.environ.get('APPDATA', ''), "WhisperApp", "logs")
+else:  # Unix/Linux/Mac
+    logs_dir = os.path.join(str(Path.home()), ".config", "whisper-app", "logs")
+
+# Crear directorio de logs si no existe
+if logs_dir:
+    os.makedirs(logs_dir, exist_ok=True)
+    log_file = os.path.join(logs_dir, "whisper_app.log")
+else:
+    log_file = os.path.join(os.path.expanduser("~"), "whisper_app.log")
+
 # Configurar logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler("whisper_app.log"),
+        logging.FileHandler(log_file),
         logging.StreamHandler()
     ]
 )

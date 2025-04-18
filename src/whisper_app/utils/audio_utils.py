@@ -11,6 +11,17 @@ import subprocess
 import numpy as np
 from pathlib import Path
 
+# Importar módulos al inicio del archivo
+try:
+    import soundfile as sf
+except ImportError:
+    sf = None
+
+try:
+    from scipy import signal
+except ImportError:
+    signal = None
+
 from whisper_app.utils.ffmpeg_utils import verify_ffmpeg, convert_to_wav
 
 logger = logging.getLogger(__name__)
@@ -33,9 +44,10 @@ def apply_vad(file_path):
         logger.error(f"El archivo no existe: {file_path}")
         return file_path
     
+    temp_file = None
     try:
         # Crear archivo temporal para salida
-        output_file = tempfile.NamedTemporaryFile(
+        temp_file = tempfile.NamedTemporaryFile(
             suffix='.wav',
             prefix='whisper_vad_',
             delete=False
@@ -49,7 +61,7 @@ def apply_vad(file_path):
             "-af", "silenceremove=stop_periods=-1:stop_duration=1:stop_threshold=-50dB",
             "-ar", "16000",
             "-ac", "1",
-            output_file
+            temp_file
         ]
         
         result = subprocess.run(
@@ -62,15 +74,27 @@ def apply_vad(file_path):
             logger.error(f"Error al ejecutar VAD: {result.stderr.decode()}")
             return file_path
         
-        if os.path.exists(output_file) and os.path.getsize(output_file) > 0:
-            logger.debug(f"VAD aplicado correctamente: {output_file}")
-            return output_file
+        if os.path.exists(temp_file) and os.path.getsize(temp_file) > 0:
+            logger.debug(f"VAD aplicado correctamente: {temp_file}")
+            return temp_file
         else:
             logger.warning("El archivo de salida de VAD está vacío o no se creó")
+            # Limpiar archivo temporal
+            if temp_file and os.path.exists(temp_file):
+                try:
+                    os.unlink(temp_file)
+                except Exception as e:
+                    logger.warning(f"Error al eliminar archivo temporal: {e}")
             return file_path
         
     except Exception as e:
         logger.error(f"Error al aplicar VAD: {e}")
+        # Limpiar archivo temporal en caso de error
+        if temp_file and os.path.exists(temp_file):
+            try:
+                os.unlink(temp_file)
+            except Exception as e:
+                logger.warning(f"Error al eliminar archivo temporal: {e}")
         return file_path
 
 def normalize_audio(file_path):
@@ -91,9 +115,10 @@ def normalize_audio(file_path):
         logger.error(f"El archivo no existe: {file_path}")
         return file_path
     
+    temp_file = None
     try:
         # Crear archivo temporal para salida
-        output_file = tempfile.NamedTemporaryFile(
+        temp_file = tempfile.NamedTemporaryFile(
             suffix='.wav',
             prefix='whisper_norm_',
             delete=False
@@ -107,7 +132,7 @@ def normalize_audio(file_path):
             "-af", "loudnorm=I=-16:LRA=11:TP=-1.5",
             "-ar", "16000",
             "-ac", "1",
-            output_file
+            temp_file
         ]
         
         result = subprocess.run(
@@ -118,17 +143,32 @@ def normalize_audio(file_path):
         
         if result.returncode != 0:
             logger.error(f"Error al normalizar audio: {result.stderr.decode()}")
+            if temp_file and os.path.exists(temp_file):
+                try:
+                    os.unlink(temp_file)
+                except Exception:
+                    pass
             return file_path
         
-        if os.path.exists(output_file) and os.path.getsize(output_file) > 0:
-            logger.debug(f"Audio normalizado correctamente: {output_file}")
-            return output_file
+        if os.path.exists(temp_file) and os.path.getsize(temp_file) > 0:
+            logger.debug(f"Audio normalizado correctamente: {temp_file}")
+            return temp_file
         else:
             logger.warning("El archivo de salida normalizado está vacío o no se creó")
+            if temp_file and os.path.exists(temp_file):
+                try:
+                    os.unlink(temp_file)
+                except Exception:
+                    pass
             return file_path
         
     except Exception as e:
         logger.error(f"Error al normalizar audio: {e}")
+        if temp_file and os.path.exists(temp_file):
+            try:
+                os.unlink(temp_file)
+            except Exception:
+                pass
         return file_path
 
 def load_audio(file_path, sample_rate=16000):
@@ -146,9 +186,9 @@ def load_audio(file_path, sample_rate=16000):
         logger.error(f"El archivo no existe: {file_path}")
         return None
     
+    temp_wav = None
     try:
         # Primero convertir a WAV si es necesario
-        temp_wav = None
         file_ext = os.path.splitext(file_path)[1].lower()
         
         if file_ext != '.wav':
@@ -160,13 +200,18 @@ def load_audio(file_path, sample_rate=16000):
             
             if not convert_to_wav(file_path, temp_wav, sample_rate=sample_rate, channels=1):
                 logger.error(f"No se pudo convertir a WAV: {file_path}")
+                if temp_wav and os.path.exists(temp_wav):
+                    try:
+                        os.unlink(temp_wav)
+                    except Exception:
+                        pass
                 return None
             
             file_path = temp_wav
         
         # Cargar archivo WAV
-        try:
-            import soundfile as sf
+        if sf is not None:
+            # Usar soundfile si está disponible
             audio, sr = sf.read(file_path)
             
             # Convertir a mono si es estéreo
@@ -174,28 +219,20 @@ def load_audio(file_path, sample_rate=16000):
                 audio = audio.mean(axis=1)
             
             # Resamplear si es necesario
-            if sr != sample_rate:
-                try:
-                    from scipy import signal
-                    audio = signal.resample(audio, int(len(audio) * sample_rate / sr))
-                except ImportError:
-                    logger.warning("No se pudo importar scipy para resamplear audio")
+            if sr != sample_rate and signal is not None:
+                audio = signal.resample(audio, int(len(audio) * sample_rate / sr))
             
             # Limpiar archivo temporal
             if temp_wav and os.path.exists(temp_wav):
                 try:
                     os.unlink(temp_wav)
-                except:
+                except Exception:
                     pass
             
             return audio
-            
-        except ImportError:
-            logger.warning("No se pudo importar soundfile, intentando con wave")
-            
+        else:
             # Alternativa usando wave
             import wave
-            import numpy as np
             
             with wave.open(file_path, 'rb') as wf:
                 n_frames = wf.getnframes()
@@ -208,18 +245,14 @@ def load_audio(file_path, sample_rate=16000):
                 
                 # Resamplear si es necesario
                 sr = wf.getframerate()
-                if sr != sample_rate:
-                    try:
-                        from scipy import signal
-                        audio = signal.resample(audio, int(len(audio) * sample_rate / sr))
-                    except ImportError:
-                        logger.warning("No se pudo importar scipy para resamplear audio")
+                if sr != sample_rate and signal is not None:
+                    audio = signal.resample(audio, int(len(audio) * sample_rate / sr))
                 
                 # Limpiar archivo temporal
                 if temp_wav and os.path.exists(temp_wav):
                     try:
                         os.unlink(temp_wav)
-                    except:
+                    except Exception:
                         pass
                 
                 return audio
@@ -231,7 +264,7 @@ def load_audio(file_path, sample_rate=16000):
         if temp_wav and os.path.exists(temp_wav):
             try:
                 os.unlink(temp_wav)
-            except:
+            except Exception:
                 pass
         
         return None
@@ -252,6 +285,7 @@ def save_audio(audio_array, file_path, sample_rate=16000):
         logger.error("Array de audio vacío o None")
         return False
     
+    temp_wav = None
     try:
         # Crear directorio si no existe
         os.makedirs(os.path.dirname(os.path.abspath(file_path)), exist_ok=True)
@@ -274,24 +308,18 @@ def save_audio(audio_array, file_path, sample_rate=16000):
         
         # Guardar según formato
         if file_ext == '.wav':
-            try:
-                import soundfile as sf
+            if sf is not None:
                 sf.write(file_path, audio_array, sample_rate)
                 return True
-            except ImportError:
-                logger.warning("No se pudo importar soundfile, intentando con wave")
-                
+            else:
+                # Alternativa con wave
                 import wave
-                import struct
                 
                 with wave.open(file_path, 'wb') as wf:
                     wf.setnchannels(1)  # Mono
                     wf.setsampwidth(2)  # 16-bit
                     wf.setframerate(sample_rate)
-                    
-                    # Convertir a bytes
-                    audio_bytes = audio_array.tobytes()
-                    wf.writeframes(audio_bytes)
+                    wf.writeframes(audio_array.tobytes())
                 
                 return True
         else:
@@ -307,10 +335,9 @@ def save_audio(audio_array, file_path, sample_rate=16000):
                 delete=False
             ).name
             
-            try:
-                import soundfile as sf
+            if sf is not None:
                 sf.write(temp_wav, audio_array, sample_rate)
-            except ImportError:
+            else:
                 # Alternativa con wave
                 import wave
                 with wave.open(temp_wav, 'wb') as wf:
@@ -334,10 +361,10 @@ def save_audio(audio_array, file_path, sample_rate=16000):
             )
             
             # Limpiar archivo temporal
-            if os.path.exists(temp_wav):
+            if temp_wav and os.path.exists(temp_wav):
                 try:
                     os.unlink(temp_wav)
-                except:
+                except Exception:
                     pass
             
             if result.returncode != 0:
@@ -348,6 +375,12 @@ def save_audio(audio_array, file_path, sample_rate=16000):
     
     except Exception as e:
         logger.error(f"Error al guardar audio: {e}")
+        # Limpiar archivo temporal en caso de error
+        if temp_wav and os.path.exists(temp_wav):
+            try:
+                os.unlink(temp_wav)
+            except Exception:
+                pass
         return False
 
 def detect_voice_segments(audio_array, sample_rate=16000, threshold=0.01, min_silence=0.5):
