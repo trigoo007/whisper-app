@@ -220,31 +220,34 @@ class FileManager:
         """
         temp_file = None
         try:
-            # Convertir a WAV con parámetros óptimos para Whisper
-            # (16kHz, mono, normalizado)
             temp_file = tempfile.NamedTemporaryFile(
                 suffix='.wav',
                 prefix='whisper_normalized_',
                 delete=False
             ).name
-            
-            normalized_path = convert_to_wav(
-                file_path, 
-                temp_file,
-                sample_rate=16000,
-                channels=1,
-                normalize=True
-            )
-            
+            try:
+                normalized_path = convert_to_wav(
+                    file_path, 
+                    temp_file,
+                    sample_rate=16000,
+                    channels=1,
+                    normalize=True
+                )
+            except Exception as e:
+                logger.warning(f"Error al normalizar audio: {e}")
+                # Limpiar archivo temporal en caso de error
+                if temp_file and os.path.exists(temp_file):
+                    try:
+                        os.unlink(temp_file)
+                    except Exception:
+                        pass
+                raise  # Propagar el error
+            # Registrar el archivo temporal para limpieza posterior
+            if normalized_path != file_path:
+                self.temp_files.append(normalized_path)
             return normalized_path
         except Exception as e:
             logger.warning(f"Error al normalizar audio: {e}, usando original")
-            # Limpiar archivo temporal en caso de error
-            if temp_file and os.path.exists(temp_file):
-                try:
-                    os.unlink(temp_file)
-                except Exception:
-                    pass
             return file_path
     
     def cleanup_temp_files(self):

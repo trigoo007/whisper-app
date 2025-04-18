@@ -50,7 +50,12 @@ def main():
             # Intentar con PyQt5 lrelease
             try:
                 from PyQt5.QtCore import QLibraryInfo
-                qt_bin_dir = QLibraryInfo.location(QLibraryInfo.BinariesPath)
+                try:
+                    # Para PyQt5 >= 5.15
+                    qt_bin_dir = QLibraryInfo.path(QLibraryInfo.LibraryPath.BinariesPath)
+                except AttributeError:
+                    # Para versiones anteriores de PyQt5
+                    qt_bin_dir = QLibraryInfo.location(QLibraryInfo.BinariesPath)
                 lrelease_path = os.path.join(qt_bin_dir, 'lrelease')
                 subprocess.run([lrelease_path, ts_file, '-qm', qm_file], check=True)
                 continue

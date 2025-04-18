@@ -125,7 +125,7 @@ class Transcriber(QObject):
         # Estimar tiempo basado en duración y modelo
         try:
             duration = get_file_duration(file_path)
-            if duration is not None:  # Verificar que duration no es None antes de usarlo
+            if duration is not None:
                 # Estimación aproximada: más lento con modelos más grandes
                 model_factor = {"tiny": 0.5, "base": 1.0, "small": 2.0, 
                                 "medium": 3.0, "large": 5.0}
@@ -137,6 +137,12 @@ class Transcriber(QObject):
                         5, 
                         f"Duración estimada: {estimate:.1f} minutos"
                     )
+            else:
+                # Manejar el caso cuando duration es None
+                self.signals.progress.emit(
+                    5,
+                    "No se pudo determinar la duración del archivo. Se usará procesamiento estándar."
+                )
         except Exception as e:
             logger.warning(f"Error al estimar tiempo: {e}")
         
@@ -144,11 +150,19 @@ class Transcriber(QObject):
         large_file = False
         max_duration = 600  # 10 minutos
         
-        if duration is not None and duration > max_duration:  # Verificar que duration no es None
-            large_file = True
+        if duration is not None:
+            if duration > max_duration:
+                large_file = True
+                self.signals.progress.emit(
+                    10, 
+                    f"Archivo grande ({duration/60:.1f} min). Se procesará por segmentos."
+                )
+        else:
+            # Manejar el caso cuando duration es None
+            large_file = False
             self.signals.progress.emit(
-                10, 
-                f"Archivo grande ({duration/60:.1f} min). Se procesará por segmentos."
+                10,
+                "No se pudo determinar la duración del archivo. Se usará procesamiento estándar."
             )
         
         processed_file = file_path
@@ -161,7 +175,13 @@ class Transcriber(QObject):
             
             if use_vad:
                 self.signals.progress.emit(15, "Aplicando detección de voz (VAD)...")
-                processed_file = apply_vad(file_path)
+                try:
+                    processed_file = apply_vad(file_path)
+                except Exception as vad_err:
+                    error_msg = f"Error al aplicar VAD: {vad_err}"
+                    logger.error(error_msg)
+                    self.signals.error.emit(error_msg)
+                    return None
                 self.signals.progress.emit(20, "Detección de voz completada")
             
             # Transcribir
@@ -323,8 +343,7 @@ class Transcriber(QObject):
             
             # Procesar cada segmento
             results = []
-            offset = 0
-            
+            offset = 0.0
             for i, segment in enumerate(segments):
                 if self.cancel_requested:
                     return None
@@ -343,7 +362,11 @@ class Transcriber(QObject):
                     seg["end"] += offset
                 
                 results.append(result)
-                offset += max_duration
+                # Mejorar precisión del offset: usar el final real del último segmento
+                if result["segments"]:
+                    offset = result["segments"][-1]["end"]
+                else:
+                    offset += max_duration
             
             # Unificar resultados
             combined_result = {

@@ -186,8 +186,11 @@ class AudioRecorder(QObject):
             self.timer.stop()
             
             if self.stream:
-                self.stream.stop()
-                self.stream.close()
+                try:
+                    self.stream.stop()
+                    self.stream.close()
+                except Exception as e:
+                    logger.warning(f"Error al cerrar el stream: {e}")
                 self.stream = None
             
             self.signals.recording_stopped.emit()
@@ -220,6 +223,14 @@ class AudioRecorder(QObject):
         except Exception as e:
             error_msg = f"Error al detener grabación: {e}"
             logger.error(error_msg)
+            # Asegurar cierre del stream incluso en caso de error
+            if self.stream:
+                try:
+                    self.stream.stop()
+                    self.stream.close()
+                except Exception:
+                    pass
+                self.stream = None
             self.signals.recording_error.emit(error_msg)
             return None
     

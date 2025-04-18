@@ -297,15 +297,19 @@ def convert_to_wav(input_path, output_path, sample_rate=16000, channels=1, norma
         )
         
         if result.returncode != 0:
-            logger.error(f"Error al ejecutar FFMPEG: {result.stderr.decode()}")
-            return None
+            error_msg = result.stderr.decode()
+            logger.error(f"Error al ejecutar FFMPEG: {error_msg}")
+            # Capturar y propagar el mensaje de error específico
+            raise RuntimeError(f"Error de FFMPEG: {error_msg}")
         
         if not os.path.exists(output_path):
             logger.error(f"No se generó el archivo de salida: {output_path}")
             return None
         
         return output_path
-    
+    except RuntimeError as e:
+        # Propagar el error específico de FFMPEG
+        raise
     except Exception as e:
         logger.error(f"Error al convertir archivo: {e}")
         return None

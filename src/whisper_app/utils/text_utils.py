@@ -214,15 +214,16 @@ def merge_segments(segments, max_chars=120, max_duration=5.0):
     
     return merged
 
-def detect_speakers(segments, num_speakers=2):
+def assign_speaker_labels_simple(segments, num_speakers=2):
     """
-    Simula detección de hablantes basada en tiempos
-    Nota: Este es un algoritmo muy básico y no usa reconocimiento real de voz
-    
+    Asigna etiquetas de hablante de forma heurística basada en pausas largas entre segmentos.
+    Nota: Esto NO es diarización real, solo una simulación simple para propósitos visuales.
+    Para diarización real, se recomienda usar bibliotecas como pyannote.audio.
+
     Args:
         segments (list): Lista de segmentos de Whisper
         num_speakers (int): Número estimado de hablantes
-    
+
     Returns:
         list: Segmentos con etiquetas de hablante
     """
@@ -254,6 +255,10 @@ def detect_speakers(segments, num_speakers=2):
         result.append(new_segment)
     
     return result
+
+# Mantener el nombre antiguo como alias para compatibilidad
+
+detect_speakers = assign_speaker_labels_simple
 
 def split_long_segments(segments, max_chars=120, max_duration=5.0):
     """
@@ -360,7 +365,7 @@ def split_long_segments(segments, max_chars=120, max_duration=5.0):
     
     return result
 
-def extract_keywords(text, max_keywords=5):
+def extract_keywords(text, max_keywords=5, language='es'):
     """
     Extrae palabras clave de un texto
     Método simple basado en frecuencia de palabras
@@ -368,6 +373,7 @@ def extract_keywords(text, max_keywords=5):
     Args:
         text (str): Texto de la transcripción
         max_keywords (int): Número máximo de palabras clave
+        language (str): Código de idioma para stopwords
     
     Returns:
         list: Lista de palabras clave
@@ -385,8 +391,7 @@ def extract_keywords(text, max_keywords=5):
     words = text.split()
     
     # Eliminar palabras vacías (stopwords)
-    # Obtener stopwords para español desde el módulo de datos de idioma
-    stopwords = get_stopwords('es')
+    stopwords = get_stopwords(language)
     
     filtered_words = [word for word in words if word not in stopwords and len(word) > 3]
     

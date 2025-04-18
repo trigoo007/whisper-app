@@ -16,7 +16,7 @@ from PyQt5.QtWidgets import (
     QWidget, QGroupBox, QFileDialog, QDialogButtonBox,
     QLineEdit, QListWidget, QListWidgetItem, QRadioButton,
     QFormLayout, QGridLayout, QSlider, QMessageBox, QProgressDialog,
-    QApplication, QTextEdit, QToolButton, QFrame
+    QApplication, QTextEdit, QToolButton, QFrame, QStyle
 )
 from PyQt5.QtCore import Qt, QSize, QUrl, QThread, pyqtSignal, QSettings, QTimer
 from PyQt5.QtGui import QIcon, QPixmap, QDesktopServices, QFont, QColor, QPalette

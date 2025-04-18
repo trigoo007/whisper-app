@@ -12,7 +12,7 @@ from PyQt5.QtWidgets import (
     QProgressBar, QTextEdit, QMessageBox, QFileDialog, QAction,
     QMenu, QStatusBar, QToolBar, QCheckBox, QShortcut, QApplication
 )
-from PyQt5.QtCore import Qt, QSize, QThread, pyqtSlot
+from PyQt5.QtCore import Qt, QSize, QThread, pyqtSlot, pyqtSignal
 from PyQt5.QtGui import QIcon, QTextCursor, QKeySequence
 
 from whisper_app.core.transcriber import Transcriber
@@ -22,8 +22,11 @@ from whisper_app.ui.dialogs import (
     ConfigDialog, 
     AudioDeviceDialog, 
     AdvancedOptionsDialog, 
-    AboutDialog
+    AboutDialog,
+    ModelDownloadDialog
 )
+from whisper_app.utils.ffmpeg_utils import verify_ffmpeg
+from whisper_app.utils.text_utils import extract_keywords
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +47,21 @@ class TranscriptionThread(QThread):
             self.language,
             self.translate_to
         )
+
+class ModelLoaderThread(QThread):
+    finished = pyqtSignal(bool, str)
+    progress = pyqtSignal(int, str)
+
+    def __init__(self, transcriber, model_name):
+        super().__init__()
+        self.transcriber = transcriber
+        self.model_name = model_name
+
+    def run(self):
+        # Conectar señales de progreso
+        self.transcriber.signals.progress.connect(self.progress.emit)
+        success = self.transcriber.load_model(self.model_name)
+        self.finished.emit(success, self.model_name)
 
 class MainWindow(QMainWindow):
     """Ventana principal de la aplicación"""
@@ -451,7 +469,7 @@ class MainWindow(QMainWindow):
             is_recording (bool): Si es un archivo de grabación
         """
         # Verificar FFMPEG primero
-        if not self.file_manager.verify_ffmpeg():
+        if not verify_ffmpeg():
             QMessageBox.critical(
                 self,
                 "Error - FFMPEG no encontrado",
@@ -463,7 +481,16 @@ class MainWindow(QMainWindow):
         try:
             # Obtener información del archivo
             normalize = self.config.get("normalize_audio", False)
-            file_info = self.file_manager.import_file(file_path, normalize)
+            try:
+                file_info = self.file_manager.import_file(file_path, normalize)
+            except Exception as e:
+                logger.error(f"Error al normalizar audio: {e}")
+                QMessageBox.critical(
+                    self,
+                    "Error de normalización",
+                    f"Ocurrió un error al normalizar el audio con FFMPEG:\n\n{e}"
+                )
+                return
             
             if not file_info:
                 QMessageBox.warning(
@@ -516,42 +543,45 @@ class MainWindow(QMainWindow):
             )
     
     def load_model(self):
-        """Carga el modelo seleccionado"""
+        """Carga el modelo seleccionado en un hilo y muestra el diálogo de descarga real"""
         model_name = self.model_combo.currentText()
-        
         self.status_label.setText(f"Cargando modelo '{model_name}'...")
         self.progress_bar.setValue(10)
-        
-        # Deshabilitar interfaz durante la carga
         self.load_model_btn.setEnabled(False)
         self.transcribe_btn.setEnabled(False)
         QApplication.processEvents()
+
+        # Crear diálogo de descarga
+        dialog = ModelDownloadDialog(model_name, self)
+        dialog.progress_bar.setValue(10)
+        dialog.status_label.setText("Preparando descarga...")
+
+        # Crear hilo de carga
+        self.model_loader_thread = ModelLoaderThread(self.transcriber, model_name)
+        self.model_loader_thread.progress.connect(lambda v, m: (dialog.progress_bar.setValue(v), dialog.status_label.setText(m)))
         
-        # Ejecutar carga
-        success = self.transcriber.load_model(model_name)
-        
-        # Restaurar interfaz
-        self.load_model_btn.setEnabled(True)
-        
-        if success:
-            self.status_label.setText(f"Modelo '{model_name}' cargado correctamente")
-            
-            # Habilitar transcripción si hay archivos
-            if self.files_list.count() > 0:
-                self.transcribe_btn.setEnabled(True)
-            
-            self.progress_bar.setValue(100)
-            self.statusBar().showMessage(f"Modelo {model_name} cargado", 3000)
-        else:
-            self.status_label.setText("Error al cargar modelo")
-            self.progress_bar.setValue(0)
-            
-            QMessageBox.critical(
-                self,
-                "Error",
-                f"No se pudo cargar el modelo '{model_name}'.\n\n"
-                "Verifica tu conexión a internet y el espacio disponible."
-            )
+        def on_finish(success, model_name):
+            dialog.accept()  # Cierra el diálogo
+            self.load_model_btn.setEnabled(True)
+            if success:
+                self.status_label.setText(f"Modelo '{model_name}' cargado correctamente")
+                if self.files_list.count() > 0:
+                    self.transcribe_btn.setEnabled(True)
+                self.progress_bar.setValue(100)
+                self.statusBar().showMessage(f"Modelo {model_name} cargado", 3000)
+            else:
+                self.status_label.setText("Error al cargar modelo")
+                self.progress_bar.setValue(0)
+                QMessageBox.critical(
+                    self,
+                    "Error",
+                    f"No se pudo cargar el modelo '{model_name}'.\n\nVerifica tu conexión a internet y el espacio disponible."
+                )
+            self.model_loader_thread = None
+
+        self.model_loader_thread.finished.connect(on_finish)
+        self.model_loader_thread.start()
+        dialog.exec_()
     
     def toggle_recording(self):
         """Inicia o detiene la grabación de audio"""
@@ -714,6 +744,11 @@ class MainWindow(QMainWindow):
         duration = transcription.get("duration", 0)
         duration_str = f"{int(duration // 60)}:{int(duration % 60):02}"
         
+        # Extraer palabras clave usando el idioma detectado
+        lang_code = language if language != "desconocido" else "es"
+        keywords = extract_keywords(transcription["text"], language=lang_code)
+        keywords_str = ", ".join(keywords)
+        
         # Información de traducción si aplica
         translation_info = ""
         if result.get("translated", False):
@@ -727,6 +762,7 @@ class MainWindow(QMainWindow):
             f"<b>Idioma detectado:</b> {language}{translation_info}<br>"
             f"<b>Palabras:</b> {words}<br>"
             f"<b>Duración:</b> {duration_str}<br>"
+            f"<b>Palabras clave:</b> {keywords_str}<br>"
             f"<b>Tiempo de proceso:</b> {result['time']:.1f} segundos"
         )
         
@@ -816,7 +852,7 @@ class MainWindow(QMainWindow):
     
     def cancel_transcription(self):
         """Cancela la transcripción en curso"""
-        if not self.transcriber or not self.cancel_btn.isEnabled():
+        if not hasattr(self, 'transcriber') or self.transcriber is None or not self.cancel_btn.isEnabled():
             return
         
         reply = QMessageBox.question(

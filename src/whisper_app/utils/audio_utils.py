@@ -26,19 +26,22 @@ from whisper_app.utils.ffmpeg_utils import verify_ffmpeg, convert_to_wav
 
 logger = logging.getLogger(__name__)
 
-def apply_vad(file_path):
+def apply_vad(file_path, threshold=0.5, min_speech=0.5, min_silence=0.5):
     """
-    Aplica detección de actividad de voz (VAD) para filtrar silencio
+    Aplica Voice Activity Detection (VAD) usando FFMPEG y devuelve la ruta al archivo procesado.
+    Lanza RuntimeError si FFMPEG falla.
     
     Args:
         file_path (str): Ruta al archivo de audio
+        threshold (float): Umbral de energía para detectar voz
+        min_speech (float): Duración mínima de voz en segundos
+        min_silence (float): Duración mínima de silencio en segundos
     
     Returns:
         str: Ruta al archivo procesado o None si hay error
     """
     if not verify_ffmpeg():
-        logger.error("FFMPEG no encontrado, no se puede aplicar VAD")
-        return file_path
+        raise RuntimeError("FFMPEG no encontrado, no se puede aplicar VAD")
     
     if not os.path.exists(file_path):
         logger.error(f"El archivo no existe: {file_path}")
@@ -58,7 +61,7 @@ def apply_vad(file_path):
             "ffmpeg",
             "-y",  # Sobrescribir sin preguntar
             "-i", file_path,
-            "-af", "silenceremove=stop_periods=-1:stop_duration=1:stop_threshold=-50dB",
+            "-af", f"silenceremove=stop_periods=-1:stop_duration={min_speech}:stop_threshold={threshold}dB",
             "-ar", "16000",
             "-ac", "1",
             temp_file
@@ -72,7 +75,7 @@ def apply_vad(file_path):
         
         if result.returncode != 0:
             logger.error(f"Error al ejecutar VAD: {result.stderr.decode()}")
-            return file_path
+            raise RuntimeError("Error al aplicar VAD con FFMPEG")
         
         if os.path.exists(temp_file) and os.path.getsize(temp_file) > 0:
             logger.debug(f"VAD aplicado correctamente: {temp_file}")
@@ -95,21 +98,22 @@ def apply_vad(file_path):
                 os.unlink(temp_file)
             except Exception as e:
                 logger.warning(f"Error al eliminar archivo temporal: {e}")
-        return file_path
+        raise RuntimeError(f"Error al aplicar VAD: {e}")
 
-def normalize_audio(file_path):
+def normalize_audio(file_path, sample_rate=16000, channels=1):
     """
-    Normaliza volumen de audio
+    Normaliza el audio usando FFMPEG. Lanza RuntimeError si FFMPEG falla.
     
     Args:
         file_path (str): Ruta al archivo de audio
+        sample_rate (int): Frecuencia de muestreo deseada
+        channels (int): Número de canales del audio
     
     Returns:
         str: Ruta al archivo normalizado o None si hay error
     """
     if not verify_ffmpeg():
-        logger.error("FFMPEG no encontrado, no se puede normalizar audio")
-        return file_path
+        raise RuntimeError("FFMPEG no encontrado, no se puede normalizar audio")
     
     if not os.path.exists(file_path):
         logger.error(f"El archivo no existe: {file_path}")
@@ -130,8 +134,8 @@ def normalize_audio(file_path):
             "-y",  # Sobrescribir sin preguntar
             "-i", file_path,
             "-af", "loudnorm=I=-16:LRA=11:TP=-1.5",
-            "-ar", "16000",
-            "-ac", "1",
+            "-ar", str(sample_rate),
+            "-ac", str(channels),
             temp_file
         ]
         
@@ -148,7 +152,7 @@ def normalize_audio(file_path):
                     os.unlink(temp_file)
                 except Exception:
                     pass
-            return file_path
+            raise RuntimeError("Error al normalizar audio con FFMPEG")
         
         if os.path.exists(temp_file) and os.path.getsize(temp_file) > 0:
             logger.debug(f"Audio normalizado correctamente: {temp_file}")
@@ -169,7 +173,7 @@ def normalize_audio(file_path):
                 os.unlink(temp_file)
             except Exception:
                 pass
-        return file_path
+        raise RuntimeError(f"Error al normalizar audio: {e}")
 
 def load_audio(file_path, sample_rate=16000):
     """
@@ -200,11 +204,6 @@ def load_audio(file_path, sample_rate=16000):
             
             if not convert_to_wav(file_path, temp_wav, sample_rate=sample_rate, channels=1):
                 logger.error(f"No se pudo convertir a WAV: {file_path}")
-                if temp_wav and os.path.exists(temp_wav):
-                    try:
-                        os.unlink(temp_wav)
-                    except Exception:
-                        pass
                 return None
             
             file_path = temp_wav
@@ -221,13 +220,6 @@ def load_audio(file_path, sample_rate=16000):
             # Resamplear si es necesario
             if sr != sample_rate and signal is not None:
                 audio = signal.resample(audio, int(len(audio) * sample_rate / sr))
-            
-            # Limpiar archivo temporal
-            if temp_wav and os.path.exists(temp_wav):
-                try:
-                    os.unlink(temp_wav)
-                except Exception:
-                    pass
             
             return audio
         else:
@@ -248,26 +240,17 @@ def load_audio(file_path, sample_rate=16000):
                 if sr != sample_rate and signal is not None:
                     audio = signal.resample(audio, int(len(audio) * sample_rate / sr))
                 
-                # Limpiar archivo temporal
-                if temp_wav and os.path.exists(temp_wav):
-                    try:
-                        os.unlink(temp_wav)
-                    except Exception:
-                        pass
-                
                 return audio
-    
     except Exception as e:
         logger.error(f"Error al cargar audio: {e}")
-        
-        # Limpiar archivo temporal en caso de error
+        return None
+    finally:
+        # Asegurar limpieza del archivo temporal siempre
         if temp_wav and os.path.exists(temp_wav):
             try:
                 os.unlink(temp_wav)
             except Exception:
                 pass
-        
-        return None
 
 def save_audio(audio_array, file_path, sample_rate=16000):
     """
@@ -360,28 +343,21 @@ def save_audio(audio_array, file_path, sample_rate=16000):
                 stderr=subprocess.PIPE
             )
             
-            # Limpiar archivo temporal
-            if temp_wav and os.path.exists(temp_wav):
-                try:
-                    os.unlink(temp_wav)
-                except Exception:
-                    pass
-            
             if result.returncode != 0:
                 logger.error(f"Error al convertir formato: {result.stderr.decode()}")
                 return False
             
             return os.path.exists(file_path)
-    
     except Exception as e:
         logger.error(f"Error al guardar audio: {e}")
-        # Limpiar archivo temporal en caso de error
+        return False
+    finally:
+        # Asegurar limpieza del archivo temporal siempre
         if temp_wav and os.path.exists(temp_wav):
             try:
                 os.unlink(temp_wav)
             except Exception:
                 pass
-        return False
 
 def detect_voice_segments(audio_array, sample_rate=16000, threshold=0.01, min_silence=0.5):
     """

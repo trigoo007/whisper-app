@@ -131,3 +131,17 @@ Este proyecto está licenciado bajo los términos de la licencia MIT. Copyright 
 - [OpenAI Whisper](https://github.com/openai/whisper) - El motor de transcripción utilizado
 - [PyQt5](https://www.riverbankcomputing.com/software/pyqt/) - Framework de UI
 - [FFmpeg](https://ffmpeg.org/) - Procesamiento de multimedia
+
+## Mejoras futuras y notas técnicas
+
+- **Optimización de UI para textos largos:**
+  - Si se detecta lentitud al mostrar transcripciones muy extensas, considera implementar carga perezosa o usar widgets optimizados para texto masivo.
+  - QTextEdit es suficiente para la mayoría de los casos, pero existen alternativas si la experiencia se ve afectada.
+
+- **Diarización real de hablantes:**
+  - La función de asignación de hablantes actual es solo heurística y no realiza diarización real.
+  - Para una diarización precisa, se recomienda integrar bibliotecas como [pyannote.audio](https://github.com/pyannote/pyannote-audio), lo que implica nuevas dependencias y un flujo más complejo.
+
+- **Empaquetado multiplataforma:**
+  - Actualmente se utiliza PyInstaller para generar ejecutables.
+  - Se recomienda evaluar [Briefcase](https://beeware.org/project/projects/tools/briefcase/) como alternativa moderna para crear instaladores nativos multiplataforma.
