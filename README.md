@@ -31,7 +31,7 @@ pip install whisper-app
 ### Opción 2: Instalación desde el código fuente
 
 ```bash
-git clone https://github.com/tu-usuario/whisper-app.git
+git clone https://github.com/trigoo007/whisper-app
 cd whisper-app
 pip install -e .
 ```
@@ -97,7 +97,7 @@ Consulta la [documentación de PyTorch](https://pytorch.org/get-started/locally/
 ### Configuración del entorno de desarrollo
 
 ```bash
-git clone https://github.com/tu-usuario/whisper-app.git
+git clone https://github.com/trigoo007/whisper-app
 cd whisper-app
 pip install -e ".[dev]"
 ```
