@@ -40,9 +40,32 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
+def check_critical_dependencies():
+    import importlib
+    import shutil
+    missing = []
+    # Dependencias de Python
+    for pkg in ["torch", "numpy", "soundfile", "scipy", "sounddevice"]:
+        try:
+            importlib.import_module(pkg)
+        except ImportError:
+            missing.append(pkg)
+    # FFMPEG
+    if not shutil.which("ffmpeg"):
+        missing.append("ffmpeg (binario)")
+    if missing:
+        msg = (
+            "\n\nFaltan dependencias críticas para ejecutar WhisperApp:\n\n" +
+            "\n".join(f"- {dep}" for dep in missing) +
+            "\n\nPor favor, instala los paquetes y/o asegúrate de que FFMPEG esté en el PATH.\n"
+        )
+        print(msg, file=sys.stderr)
+        sys.exit(2)
+
 def main():
     """Punto de entrada principal de la aplicación"""
     try:
+        check_critical_dependencies()
         # Inicializar aplicación Qt
         app = QApplication(sys.argv)
         app.setApplicationName("WhisperApp")

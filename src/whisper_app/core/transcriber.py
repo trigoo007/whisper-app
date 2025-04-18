@@ -102,6 +102,7 @@ class Transcriber(QObject):
             dict: Resultado de la transcripción o None si hubo error
         """
         self.cancel_requested = False
+        duration = None  # Inicializar explícitamente
         
         # Verificar que existe el archivo
         if not os.path.exists(file_path):
@@ -145,6 +146,7 @@ class Transcriber(QObject):
                 )
         except Exception as e:
             logger.warning(f"Error al estimar tiempo: {e}")
+            duration = None
         
         # Determinar si el archivo es grande para procesarlo por segmentos
         large_file = False
@@ -301,10 +303,9 @@ class Transcriber(QObject):
         Returns:
             dict: Resultado combinado
         """
-        # Obtener duración total
         duration = get_file_duration(file_path)
         if duration is None:
-            # Si no se puede determinar la duración, usar un valor predeterminado
+            # Si no se puede determinar la duración, usar un valor predeterminado y documentar
             duration = max_duration * 2
             logger.warning(f"No se pudo determinar la duración, usando valor predeterminado: {duration}s")
         
@@ -347,26 +348,26 @@ class Transcriber(QObject):
             for i, segment in enumerate(segments):
                 if self.cancel_requested:
                     return None
-                
                 self.signals.progress.emit(
                     50 + (i * 25) // len(segments),
                     f"Transcribiendo parte {i+1}/{len(segments)}..."
                 )
-                
                 # Transcribir segmento
                 result = self.model.transcribe(segment, **options)
-                
                 # Ajustar timestamps
                 for seg in result["segments"]:
                     seg["start"] += offset
                     seg["end"] += offset
-                
                 results.append(result)
                 # Mejorar precisión del offset: evitar solapamientos o huecos
                 if result["segments"]:
                     last_end = result["segments"][-1]["end"]
                     segment_duration = get_file_duration(segment) or max_duration
-                    offset = max(last_end, offset + segment_duration)
+                    # Si hay un pequeño desfase, ajustarlo para evitar huecos/solapamientos
+                    if abs(last_end - segment_duration) < 0.5:
+                        offset += segment_duration
+                    else:
+                        offset = last_end
                 else:
                     offset += max_duration
             
