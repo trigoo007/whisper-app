@@ -10,6 +10,10 @@ import logging
 import subprocess
 import shutil
 from pathlib import Path
+import json
+import tempfile
+
+from whisper_app.core.exceptions import FFMpegError # Importar la excepción personalizada
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +35,7 @@ def verify_ffmpeg():
         return True
     except subprocess.SubprocessError as e:
         logger.debug(f"Error al verificar FFMPEG: {e}")
-    except Exception as e:
+    except FileNotFoundError as e:
         logger.debug(f"Error al verificar FFMPEG en ruta específica: {e}")
     
     logger.warning("FFMPEG no encontrado en el sistema")
@@ -52,7 +56,7 @@ def find_ffmpeg():
         ffmpeg_path = shutil.which(ffmpeg_command)
         if ffmpeg_path:
             return ffmpeg_path
-    except Exception as e:
+    except (subprocess.SubprocessError, FileNotFoundError) as e:
         logger.debug(f"Error buscando FFMPEG en PATH: {e}")
     
     # Verificar ubicaciones comunes según sistema operativo
@@ -150,11 +154,11 @@ def get_file_info(file_path):
         )
         
         if result.returncode != 0:
-            logger.error(f"Error al ejecutar ffprobe: {result.stderr}")
+            stderr_output = result.stderr.decode()
+            logger.error(f"Error al ejecutar ffprobe: {stderr_output}")
             return None
         
         # Parsear salida JSON
-        import json
         info = json.loads(result.stdout)
         
         # Extraer información relevante
@@ -192,7 +196,7 @@ def get_file_info(file_path):
         
         return output
     
-    except Exception as e:
+    except (json.JSONDecodeError, KeyError, IndexError, subprocess.SubprocessError, FileNotFoundError) as e:
         logger.error(f"Error al obtener información del archivo: {e}")
         return None
 
@@ -249,14 +253,15 @@ def get_file_duration(file_path):
         )
         
         if result.returncode != 0:
-            logger.error(f"Error al ejecutar ffprobe: {result.stderr}")
+            stderr_output = result.stderr.decode()
+            logger.error(f"Error al ejecutar ffprobe: {stderr_output}")
             return None
         
         # Parsear salida
         duration = float(result.stdout.strip())
         return duration
     
-    except Exception as e:
+    except (subprocess.SubprocessError, FileNotFoundError, ValueError, KeyError) as e:
         logger.error(f"Error al obtener duración: {e}")
         return None
 
@@ -312,16 +317,17 @@ def convert_to_wav(input_path, output_path, sample_rate=16000, channels=1, norma
             error_msg = result.stderr.decode()
             logger.error(f"Error al ejecutar FFMPEG: {error_msg}")
             # Capturar y propagar el mensaje de error específico
-            raise RuntimeError(f"Error de FFMPEG: {error_msg}")
+            raise FFMpegError(f"Error de FFMPEG: {error_msg}")
         
         if not os.path.exists(output_path):
             logger.error(f"No se generó el archivo de salida: {output_path}")
             return None
         
         return output_path
-    except RuntimeError as e:
-        # Propagar el error específico de FFMPEG
-        raise
+    except subprocess.SubprocessError as e:
+        # Capturar otros errores de subprocess
+        logger.error(f"Error de subprocess durante la conversión: {e}")
+        raise FFMpegError(f"Error de subprocess durante la conversión: {e}") from e
     except Exception as e:
         logger.error(f"Error al convertir archivo: {e}")
         return None

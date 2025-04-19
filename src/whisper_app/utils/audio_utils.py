@@ -24,46 +24,57 @@ except ImportError:
     signal = None
     logging.warning("El módulo 'scipy' no está instalado. El remuestreo de audio será menos preciso.")
 
-from whisper_app.utils.ffmpeg_utils import verify_ffmpeg, convert_to_wav
+from whisper_app.utils import ffmpeg_utils
+from whisper_app.core.exceptions import FFMpegError, FileProcessingError
 
 logger = logging.getLogger(__name__)
 
-def apply_vad(file_path, threshold=0.5, min_speech=0.5, min_silence=0.5):
+def apply_vad(file_path: str, output_dir: str, ffmpeg_path: str = None) -> str | None:
     """
-    Aplica Voice Activity Detection (VAD) usando FFMPEG y devuelve la ruta al archivo procesado.
-    Lanza RuntimeError si FFMPEG falla.
-    
+    Aplica Voice Activity Detection (VAD) usando FFMPEG.
+    Lanza FFMpegError si FFMPEG falla o no se encuentra.
+    Lanza FileNotFoundError si el archivo de entrada no existe.
+
     Args:
-        file_path (str): Ruta al archivo de audio
-        threshold (float): Umbral de energía para detectar voz
-        min_speech (float): Duración mínima de voz en segundos
-        min_silence (float): Duración mínima de silencio en segundos
-    
+        file_path (str): Ruta al archivo de audio.
+        output_dir (str): Directorio para guardar el archivo procesado.
+        ffmpeg_path (str, optional): Ruta al ejecutable de FFMPEG. Defaults to None.
+
     Returns:
-        str: Ruta al archivo procesado o None si hay error
+        str: Ruta al archivo procesado.
+
+    Raises:
+        FFMpegError: Si FFMPEG no se encuentra o falla la operación.
+        FileNotFoundError: Si el archivo de entrada no existe.
     """
-    if not verify_ffmpeg():
-        raise RuntimeError("FFMPEG no encontrado, no se puede aplicar VAD")
-    
+    if not ffmpeg_utils.check_ffmpeg(ffmpeg_path):
+        msg = "FFMPEG no encontrado, no se puede aplicar VAD"
+        logger.error(msg)
+        raise FFMpegError(msg)
+
     if not os.path.exists(file_path):
-        logger.error(f"El archivo no existe: {file_path}")
-        return file_path
-    
+        msg = f"El archivo no existe: {file_path}"
+        logger.error(msg)
+        raise FileNotFoundError(msg)
+
     temp_file = None
     try:
         # Crear archivo temporal para salida
-        temp_file = tempfile.NamedTemporaryFile(
+        temp_output = tempfile.NamedTemporaryFile(
             suffix='.wav',
             prefix='whisper_vad_',
+            dir=output_dir,
             delete=False
-        ).name
-        
+        )
+        temp_file = temp_output.name
+        temp_output.close() # Cerrar el archivo para que FFMPEG pueda escribir
+
         # Aplicar filtro de silencio con FFMPEG
         command = [
             "ffmpeg",
             "-y",  # Sobrescribir sin preguntar
             "-i", file_path,
-            "-af", f"silenceremove=stop_periods=-1:stop_duration={min_speech}:stop_threshold={threshold}dB",
+            "-af", f"silenceremove=stop_periods=-1:stop_duration=0.5:stop_threshold=0.5dB",
             "-ar", "16000",
             "-ac", "1",
             temp_file
@@ -76,68 +87,82 @@ def apply_vad(file_path, threshold=0.5, min_speech=0.5, min_silence=0.5):
         )
         
         if result.returncode != 0:
-            logger.error(f"Error al ejecutar VAD: {result.stderr.decode()}")
-            raise RuntimeError("Error al aplicar VAD con FFMPEG")
-        
-        if os.path.exists(temp_file) and os.path.getsize(temp_file) > 0:
-            logger.debug(f"VAD aplicado correctamente: {temp_file}")
-            return temp_file
-        else:
-            logger.warning("El archivo de salida de VAD está vacío o no se creó")
-            # Limpiar archivo temporal
-            if temp_file and os.path.exists(temp_file):
-                try:
-                    os.unlink(temp_file)
-                except Exception as e:
-                    logger.warning(f"Error al eliminar archivo temporal: {e}")
-            return file_path
-        
-    except Exception as e:
-        logger.error(f"Error al aplicar VAD: {e}")
-        # Limpiar archivo temporal en caso de error
-        if temp_file and os.path.exists(temp_file):
-            try:
-                os.unlink(temp_file)
-            except Exception as e:
-                logger.warning(f"Error al eliminar archivo temporal: {e}")
-        raise RuntimeError(f"Error al aplicar VAD: {e}")
+            error_msg = result.stderr.decode()
+            logger.error(f"Error al ejecutar VAD: {error_msg}")
+            raise FFMpegError(f"Error al aplicar VAD con FFMPEG: {error_msg}")
 
-def normalize_audio(file_path, sample_rate=16000, channels=1):
+        if not os.path.exists(temp_file) or os.path.getsize(temp_file) == 0:
+            logger.warning(f"VAD no generó salida o el archivo está vacío: {temp_file}")
+            raise FFMpegError(f"VAD no generó salida válida para {file_path}")
+
+        logger.debug(f"VAD aplicado correctamente: {temp_file}")
+        return temp_file
+
+    except subprocess.SubprocessError as e:
+        logger.error(f"Error de subprocess al aplicar VAD: {e}")
+        if os.path.exists(temp_file):
+            try:
+                os.remove(temp_file)
+            except OSError as rm_err:
+                logger.warning(f"Error al eliminar archivo temporal: {rm_err}")
+        raise FFMpegError(f"Error de subprocess al aplicar VAD: {e}") from e
+    except Exception as e:
+        logger.error(f"Error inesperado al aplicar VAD: {e}")
+        if os.path.exists(temp_file):
+            try:
+                os.remove(temp_file)
+            except OSError as rm_err:
+                logger.warning(f"Error al eliminar archivo temporal: {rm_err}")
+        raise FileProcessingError(f"Error inesperado al aplicar VAD: {e}") from e
+
+def normalize_audio(file_path: str, output_dir: str, ffmpeg_path: str = None) -> str | None:
     """
-    Normaliza el audio usando FFMPEG. Lanza RuntimeError si FFMPEG falla.
-    
+    Normaliza el audio usando FFMPEG.
+    Lanza FFMpegError si FFMPEG falla o no se encuentra.
+    Lanza FileNotFoundError si el archivo de entrada no existe.
+
     Args:
-        file_path (str): Ruta al archivo de audio
-        sample_rate (int): Frecuencia de muestreo deseada
-        channels (int): Número de canales del audio
-    
+        file_path (str): Ruta al archivo de audio.
+        output_dir (str): Directorio para guardar el archivo normalizado.
+        ffmpeg_path (str, optional): Ruta al ejecutable de FFMPEG. Defaults to None.
+
     Returns:
-        str: Ruta al archivo normalizado o None si hay error
+        str: Ruta al archivo normalizado.
+
+    Raises:
+        FFMpegError: Si FFMPEG no se encuentra o falla la operación.
+        FileNotFoundError: Si el archivo de entrada no existe.
     """
-    if not verify_ffmpeg():
-        raise RuntimeError("FFMPEG no encontrado, no se puede normalizar audio")
-    
+    if not ffmpeg_utils.check_ffmpeg(ffmpeg_path):
+        msg = "FFMPEG no encontrado, no se puede normalizar audio"
+        logger.error(msg)
+        raise FFMpegError(msg)
+
     if not os.path.exists(file_path):
-        logger.error(f"El archivo no existe: {file_path}")
-        return file_path
-    
+        msg = f"El archivo no existe: {file_path}"
+        logger.error(msg)
+        raise FileNotFoundError(msg)
+
     temp_file = None
     try:
         # Crear archivo temporal para salida
-        temp_file = tempfile.NamedTemporaryFile(
+        temp_output = tempfile.NamedTemporaryFile(
             suffix='.wav',
             prefix='whisper_norm_',
+            dir=output_dir,
             delete=False
-        ).name
-        
+        )
+        temp_file = temp_output.name
+        temp_output.close()
+
         # Normalizar audio con FFMPEG
         command = [
             "ffmpeg",
             "-y",  # Sobrescribir sin preguntar
             "-i", file_path,
             "-af", "loudnorm=I=-16:LRA=11:TP=-1.5",
-            "-ar", str(sample_rate),
-            "-ac", str(channels),
+            "-ar", "16000",
+            "-ac", "1",
             temp_file
         ]
         
@@ -148,218 +173,185 @@ def normalize_audio(file_path, sample_rate=16000, channels=1):
         )
         
         if result.returncode != 0:
-            logger.error(f"Error al normalizar audio: {result.stderr.decode()}")
-            if temp_file and os.path.exists(temp_file):
-                try:
-                    os.unlink(temp_file)
-                except Exception:
-                    pass
-            raise RuntimeError("Error al normalizar audio con FFMPEG")
-        
-        if os.path.exists(temp_file) and os.path.getsize(temp_file) > 0:
-            logger.debug(f"Audio normalizado correctamente: {temp_file}")
-            return temp_file
-        else:
-            logger.warning("El archivo de salida normalizado está vacío o no se creó")
-            if temp_file and os.path.exists(temp_file):
-                try:
-                    os.unlink(temp_file)
-                except Exception:
-                    pass
-            return file_path
-        
-    except Exception as e:
-        logger.error(f"Error al normalizar audio: {e}")
-        if temp_file and os.path.exists(temp_file):
-            try:
-                os.unlink(temp_file)
-            except Exception:
-                pass
-        raise RuntimeError(f"Error al normalizar audio: {e}")
+            error_msg = result.stderr.decode()
+            logger.error(f"Error al normalizar audio: {error_msg}")
+            if os.path.exists(temp_file):
+                try: os.remove(temp_file)
+                except OSError: pass
+            raise FFMpegError(f"Error al normalizar audio con FFMPEG: {error_msg}")
 
-def load_audio(file_path, sample_rate=16000):
+        if not os.path.exists(temp_file) or os.path.getsize(temp_file) == 0:
+            logger.error(f"Normalización no generó salida o el archivo está vacío: {temp_file}")
+            raise FFMpegError(f"Normalización no generó salida válida para {file_path}")
+
+        logger.debug(f"Audio normalizado correctamente: {temp_file}")
+        return temp_file
+
+    except subprocess.SubprocessError as e:
+        logger.error(f"Error de subprocess al normalizar audio: {e}")
+        if os.path.exists(temp_file):
+            try: os.remove(temp_file)
+            except OSError as rm_err: logger.warning(f"Error al eliminar temp: {rm_err}")
+        raise FFMpegError(f"Error de subprocess al normalizar: {e}") from e
+    except Exception as e:
+        logger.error(f"Error inesperado al normalizar audio: {e}")
+        if os.path.exists(temp_file):
+            try: os.remove(temp_file)
+            except OSError as rm_err: logger.warning(f"Error al eliminar temp: {rm_err}")
+        raise FileProcessingError(f"Error inesperado al normalizar: {e}") from e
+
+def load_audio(file_path: str, sample_rate: int = 16000) -> np.ndarray | None:
     """
-    Carga un archivo de audio en un array NumPy
-    
+    Carga un archivo de audio y lo convierte a la tasa de muestreo deseada.
+    Utiliza FFMPEG para formatos no soportados directamente por soundfile.
+
     Args:
-        file_path (str): Ruta al archivo de audio
-        sample_rate (int): Frecuencia de muestreo deseada
-    
+        file_path (str): Ruta al archivo de audio.
+        sample_rate (int): Tasa de muestreo deseada (default: 16000 Hz).
+
     Returns:
-        np.ndarray: Array con datos de audio o None si hay error
+        np.ndarray: Array con datos de audio o None si hay error.
+
+    Raises:
+        FileNotFoundError: Si el archivo no existe.
+        FileProcessingError: Si ocurre un error durante la carga o conversión.
+        FFMpegError: Si FFMPEG es necesario y falla.
     """
     if not os.path.exists(file_path):
-        logger.error(f"El archivo no existe: {file_path}")
-        return None
-    
-    temp_wav = None
+        msg = f"El archivo no existe: {file_path}"
+        logger.error(msg)
+        raise FileNotFoundError(msg)
+
+    temp_wav_file = None
     try:
-        # Primero convertir a WAV si es necesario
-        file_ext = os.path.splitext(file_path)[1].lower()
-        
-        if file_ext != '.wav':
-            temp_wav = tempfile.NamedTemporaryFile(
+        # Intentar cargar directamente con soundfile
+        try:
+            with sf.SoundFile(file_path, 'r') as f:
+                audio = f.read(dtype='float32')
+                sr = f.samplerate
+                if sr != sample_rate:
+                    audio = signal.resample(audio, int(len(audio) * sample_rate / sr))
+                return audio
+        except sf.SoundFileError:
+            logger.debug(f"Soundfile no soporta {file_path}, intentando con FFMPEG")
+            if not ffmpeg_utils.check_ffmpeg():
+                raise FFMpegError("FFMPEG necesario para convertir formato no soportado por soundfile")
+
+            with tempfile.NamedTemporaryFile(
                 suffix='.wav',
                 prefix='whisper_audio_',
                 delete=False
-            ).name
-            
-            if not convert_to_wav(file_path, temp_wav, sample_rate=sample_rate, channels=1):
-                logger.error(f"No se pudo convertir a WAV: {file_path}")
-                return None
-            
-            file_path = temp_wav
-        
-        # Cargar archivo WAV
-        if sf is not None:
-            # Usar soundfile si está disponible
-            audio, sr = sf.read(file_path)
-            
-            # Convertir a mono si es estéreo
-            if len(audio.shape) > 1 and audio.shape[1] > 1:
-                audio = audio.mean(axis=1)
-            
-            # Resamplear si es necesario
-            if sr != sample_rate and signal is not None:
-                audio = signal.resample(audio, int(len(audio) * sample_rate / sr))
-            
-            return audio
-        else:
-            # Alternativa usando wave
-            import wave
-            
-            with wave.open(file_path, 'rb') as wf:
-                n_frames = wf.getnframes()
-                audio = np.frombuffer(wf.readframes(n_frames), dtype=np.int16)
-                audio = audio.astype(np.float32) / 32768.0  # Normalizar a [-1.0, 1.0]
-                
-                # Convertir a mono si es estéreo
-                if wf.getnchannels() > 1:
-                    audio = audio.reshape(-1, wf.getnchannels()).mean(axis=1)
-                
-                # Resamplear si es necesario
-                sr = wf.getframerate()
-                if sr != sample_rate and signal is not None:
-                    audio = signal.resample(audio, int(len(audio) * sample_rate / sr))
-                
-                return audio
+            ) as temp_output:
+                temp_wav_file = temp_output.name
+
+            try:
+                ffmpeg_utils.convert_to_wav(file_path, temp_wav_file, sample_rate=sample_rate)
+                if not temp_wav_file or not os.path.exists(temp_wav_file):
+                     raise FileProcessingError(f"No se pudo convertir a WAV: {file_path}")
+
+                with sf.SoundFile(temp_wav_file, 'r') as f:
+                    audio = f.read(dtype='float32')
+                    sr = f.samplerate
+                    if sr != sample_rate:
+                        audio = signal.resample(audio, int(len(audio) * sample_rate / sr))
+                    return audio
+            except (FFMpegError, FileNotFoundError, sf.SoundFileError) as convert_err:
+                 logger.error(f"Error al convertir/cargar con FFMPEG: {convert_err}")
+                 raise FileProcessingError(f"Error procesando archivo con FFMPEG: {convert_err}") from convert_err
+
     except Exception as e:
         logger.error(f"Error al cargar audio: {e}")
-        return None
+        raise FileProcessingError(f"Error al cargar audio: {e}") from e
     finally:
-        # Asegurar limpieza del archivo temporal siempre
-        if temp_wav and os.path.exists(temp_wav):
+        if temp_wav_file and os.path.exists(temp_wav_file):
             try:
-                os.unlink(temp_wav)
-            except Exception:
-                pass
+                os.remove(temp_wav_file)
+            except OSError as e:
+                logger.warning(f"Error al eliminar archivo temporal {temp_wav_file}: {e}")
 
-def save_audio(audio_array, file_path, sample_rate=16000):
+def save_audio(audio_data: np.ndarray, file_path: str, sample_rate: int = 16000):
     """
-    Guarda un array NumPy como archivo de audio
-    
+    Guarda datos de audio en un archivo.
+    Utiliza FFMPEG para formatos no WAV.
+
     Args:
-        audio_array (np.ndarray): Array con datos de audio
-        file_path (str): Ruta donde guardar el archivo
-        sample_rate (int): Frecuencia de muestreo
-    
-    Returns:
-        bool: True si se guardó correctamente, False en caso contrario
+        audio_data (np.ndarray): Array numpy con los datos de audio.
+        file_path (str): Ruta donde guardar el archivo.
+        sample_rate (int): Tasa de muestreo (default: 16000 Hz).
+
+    Raises:
+        FileProcessingError: Si los datos de audio son inválidos o hay error al guardar.
+        FFMpegError: Si FFMPEG es necesario y falla.
     """
-    if audio_array is None or len(audio_array) == 0:
-        logger.error("Array de audio vacío o None")
-        return False
-    
-    temp_wav = None
+    if audio_data is None or audio_data.size == 0:
+        msg = "Array de audio vacío o None, no se puede guardar."
+        logger.error(msg)
+        raise FileProcessingError(msg)
+
+    temp_wav_file = None
     try:
-        # Crear directorio si no existe
-        os.makedirs(os.path.dirname(os.path.abspath(file_path)), exist_ok=True)
-        
-        # Determinar formato según extensión
-        file_ext = os.path.splitext(file_path)[1].lower()
-        
-        # Normalizar audio si es necesario
-        if audio_array.dtype != np.int16:
-            if audio_array.max() <= 1.0 and audio_array.min() >= -1.0:
-                # Convertir de float [-1.0, 1.0] a int16
-                audio_array = (audio_array * 32767).astype(np.int16)
-            elif audio_array.dtype == np.float32 or audio_array.dtype == np.float64:
-                # Normalizar y convertir a int16
-                max_val = max(abs(audio_array.max()), abs(audio_array.min()))
-                if max_val > 0:
-                    audio_array = (audio_array / max_val * 32767).astype(np.int16)
-                else:
-                    audio_array = audio_array.astype(np.int16)
-        
-        # Guardar según formato
+        file_ext = Path(file_path).suffix.lower()
+
         if file_ext == '.wav':
             if sf is not None:
-                sf.write(file_path, audio_array, sample_rate)
-                return True
+                sf.write(file_path, audio_data, sample_rate)
             else:
-                # Alternativa con wave
                 import wave
-                
                 with wave.open(file_path, 'wb') as wf:
-                    wf.setnchannels(1)  # Mono
-                    wf.setsampwidth(2)  # 16-bit
+                    wf.setnchannels(1)
+                    wf.setsampwidth(2)
                     wf.setframerate(sample_rate)
-                    wf.writeframes(audio_array.tobytes())
-                
-                return True
+                    wf.writeframes(audio_data.tobytes())
         else:
-            # Para otros formatos, usar FFMPEG
-            if not verify_ffmpeg():
-                logger.error("FFMPEG no encontrado, no se puede guardar en formato no-WAV")
-                return False
-            
-            # Guardar primero como WAV temporal
-            temp_wav = tempfile.NamedTemporaryFile(
+            if not ffmpeg_utils.check_ffmpeg():
+                msg = "FFMPEG no encontrado, no se puede guardar en formato no-WAV"
+                logger.error(msg)
+                raise FFMpegError(msg)
+
+            with tempfile.NamedTemporaryFile(
                 suffix='.wav',
                 prefix='whisper_audio_',
                 delete=False
-            ).name
-            
+            ) as temp_output:
+                temp_wav_file = temp_output.name
+
             if sf is not None:
-                sf.write(temp_wav, audio_array, sample_rate)
+                sf.write(temp_wav_file, audio_data, sample_rate)
             else:
-                # Alternativa con wave
                 import wave
-                with wave.open(temp_wav, 'wb') as wf:
-                    wf.setnchannels(1)  # Mono
-                    wf.setsampwidth(2)  # 16-bit
+                with wave.open(temp_wav_file, 'wb') as wf:
+                    wf.setnchannels(1)
+                    wf.setsampwidth(2)
                     wf.setframerate(sample_rate)
-                    wf.writeframes(audio_array.tobytes())
-            
-            # Convertir a formato deseado con FFMPEG
+                    wf.writeframes(audio_data.tobytes())
+
             command = [
-                "ffmpeg",
-                "-y",  # Sobrescribir sin preguntar
-                "-i", temp_wav,
+                'ffmpeg',
+                '-y',
+                '-i', temp_wav_file,
                 file_path
             ]
-            
-            result = subprocess.run(
-                command,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE
-            )
-            
+            result = subprocess.run(command, capture_output=True, check=False)
+
             if result.returncode != 0:
-                logger.error(f"Error al convertir formato: {result.stderr.decode()}")
-                return False
-            
-            return os.path.exists(file_path)
-    except Exception as e:
+                error_msg = result.stderr.decode()
+                logger.error(f"Error al convertir formato con FFMPEG: {error_msg}")
+                raise FFMpegError(f"Error de FFMPEG al guardar en {file_ext}: {error_msg}")
+
+            logger.debug(f"Audio guardado en {file_path} usando FFMPEG")
+
+    except (sf.SoundFileError, subprocess.SubprocessError, FFMpegError) as e:
         logger.error(f"Error al guardar audio: {e}")
-        return False
+        raise FileProcessingError(f"Error al guardar audio en {file_path}: {e}") from e
+    except Exception as e:
+        logger.error(f"Error inesperado al guardar audio: {e}")
+        raise FileProcessingError(f"Error inesperado al guardar audio: {e}") from e
     finally:
-        # Asegurar limpieza del archivo temporal siempre
-        if temp_wav and os.path.exists(temp_wav):
+        if temp_wav_file and os.path.exists(temp_wav_file):
             try:
-                os.unlink(temp_wav)
-            except Exception:
-                pass
+                os.remove(temp_wav_file)
+            except OSError as e:
+                logger.warning(f"Error al eliminar archivo temporal {temp_wav_file}: {e}")
 
 def detect_voice_segments(audio_array, sample_rate=16000, threshold=0.01, min_silence=0.5):
     """

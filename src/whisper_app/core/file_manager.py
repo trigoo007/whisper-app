@@ -10,18 +10,13 @@ import tempfile
 import logging
 from datetime import datetime
 from pathlib import Path
+from typing import Optional, Dict, Any
 
-# Añadir importación directa de verify_ffmpeg
-from whisper_app.utils.ffmpeg_utils import (
-    verify_ffmpeg, 
-    get_file_duration, 
-    get_file_info,
-    convert_to_wav
-)
-from whisper_app.utils.text_utils import (
-    save_txt, 
-    save_srt, 
-    save_vtt
+from whisper_app.utils import ffmpeg_utils, audio_utils, text_utils
+from whisper_app.models import TranscriptionResult
+from whisper_app.core.config_manager import ConfigManager
+from whisper_app.core.exceptions import (
+    FileProcessingError, FFMpegError, ConfigError, WhisperAppError
 )
 
 logger = logging.getLogger(__name__)
@@ -100,177 +95,265 @@ class FileManager:
             logger.warning(f"No se pudo verificar el espacio en disco: {e}")
             return True  # No bloquear si no se puede verificar
 
-    def import_file(self, file_path, normalize_audio=False):
+    def import_file(self, file_path: str) -> Optional[Dict[str, Any]]:
         """
-        Importa un archivo para procesamiento
-        
+        Importa y procesa un archivo de audio/video.
+        Convierte a WAV mono 16kHz si es necesario.
+
         Args:
-            file_path (str): Ruta al archivo a importar
-            normalize_audio (bool): Si se debe normalizar el audio
-        
+            file_path (str): Ruta al archivo original.
+
         Returns:
-            dict: Información del archivo o None si hubo error
+            dict: Información del archivo importado (ruta, duración, etc.) o None si hay error.
+
+        Raises:
+            FileNotFoundError: Si el archivo original no existe.
+            FileProcessingError: Si hay un error durante la importación o procesamiento.
+            FFMpegError: Si FFMPEG es necesario y falla.
+            ConfigError: Si hay un error al acceder a la configuración.
         """
         if not os.path.exists(file_path):
-            logger.error(f"El archivo no existe: {file_path}")
-            return None
-        
-        if not self.is_supported_file(file_path):
-            logger.error(f"Formato de archivo no soportado: {file_path}")
-            return None
-        
-        # Verificamos directamente si FFMPEG está disponible
-        if not verify_ffmpeg():
-            logger.error("FFMPEG no encontrado, es necesario para procesar archivos")
-            return None
-        
-        # Verificar espacio antes de crear temporales
-        if not self._has_enough_disk_space(file_path):
-            logger.error("Espacio en disco insuficiente para importar archivo")
-            return None
-        
+            msg = f"El archivo no existe: {file_path}"
+            logger.error(msg)
+            raise FileNotFoundError(msg)
+
+        file_ext = Path(file_path).suffix.lower()
+        if file_ext not in self.supported_extensions:
+            msg = f"Formato de archivo no soportado: {file_path}"
+            logger.error(msg)
+            raise FileProcessingError(msg)
+
+        if not ffmpeg_utils.check_ffmpeg():
+            # FFMPEG es necesario para casi cualquier cosa que no sea WAV puro
+            if file_ext != '.wav':
+                msg = "FFMPEG no encontrado, es necesario para procesar este formato de archivo"
+                logger.error(msg)
+                raise FFMpegError(msg)
+            else:
+                # Podría ser un WAV no estándar, FFMPEG aún podría ser necesario más tarde
+                logger.warning("FFMPEG no encontrado, la importación de WAV podría fallar si no es estándar.")
+
+        # Verificar espacio en disco (aproximado)
         try:
-            # Obtener información del archivo
-            file_info = get_file_info(file_path)
-            
-            # Si es necesario, convertir/normalizar
-            processed_path = file_path
-            if normalize_audio:
-                processed_path = self._normalize_audio(file_path)
-                if processed_path != file_path:
-                    self.temp_files.append(processed_path)
-            
-            # Añadir a archivos recientes
-            self.config.add_recent_file(file_path)
-            
-            # Obtener duración de manera segura
-            duration = get_file_duration(file_path)
+            # ... (código de verificación de espacio)
+        except OSError as e:
+            msg = f"Error al verificar espacio en disco: {e}"
+            logger.error(msg)
+            raise FileProcessingError(msg) from e
+
+        if not self._has_enough_space(file_path):
+            msg = "Espacio en disco insuficiente para importar archivo"
+            logger.error(msg)
+            raise FileProcessingError(msg)
+
+        processed_file_path = None
+        temp_dir = None
+        try:
+            temp_dir = tempfile.mkdtemp(prefix="whisper_import_")
+            target_filename = f"imported_audio_{Path(file_path).stem}.wav"
+            processed_file_path = os.path.join(temp_dir, target_filename)
+
+            logger.info(f"Importando archivo: {file_path}")
+            self.signals.status_update.emit(f"Importando: {Path(file_path).name}")
+
+            # Convertir a WAV 16kHz mono usando FFMPEG si es necesario
+            # La función convert_to_wav ya maneja FileNotFoundError y FFMpegError
+            ffmpeg_utils.convert_to_wav(file_path, processed_file_path)
+
+            if not os.path.exists(processed_file_path):
+                 # Esto no debería ocurrir si convert_to_wav no lanzó excepción
+                 raise FileProcessingError(f"Archivo procesado no encontrado después de la conversión: {processed_file_path}")
+
+            # Obtener información del archivo procesado
+            duration = ffmpeg_utils.get_duration(processed_file_path)
             if duration is None:
-                duration = 0.0  # Valor predeterminado si no se puede determinar
-            
-            # Crear y devolver información
-            return {
-                'original_path': file_path,
-                'processed_path': processed_path,
-                'name': os.path.basename(file_path),
-                'size': os.path.getsize(file_path),
-                'duration': duration,
-                'created': datetime.fromtimestamp(os.path.getctime(file_path)),
-                'modified': datetime.fromtimestamp(os.path.getmtime(file_path)),
-                'info': file_info
+                # get_duration ahora devuelve None en lugar de lanzar excepción en caso de error
+                logger.warning(f"No se pudo obtener la duración del archivo procesado: {processed_file_path}")
+                # Podríamos lanzar un error o continuar con duración desconocida
+                # raise FileProcessingError(f"No se pudo obtener la duración de {processed_file_path}")
+
+            file_info = {
+                "original_path": file_path,
+                "processed_path": processed_file_path,
+                "duration": duration,
+                "size": os.path.getsize(processed_file_path),
+                "format": "wav"
             }
-            
+
+            logger.info(f"Archivo importado exitosamente a: {processed_file_path}")
+            self.signals.status_update.emit("Archivo importado")
+            self.signals.file_imported.emit(file_info)
+
+            # Devolver file_info para uso interno si es necesario
+            return file_info
+
+        except (FileNotFoundError, FFMpegError, FileProcessingError, ConfigError) as e:
+            # Errores específicos ya conocidos, relanzar
+            logger.error(f"Error durante la importación: {e}", exc_info=True)
+            # Limpiar parcialmente si es posible
+            if processed_file_path and os.path.exists(processed_file_path):
+                try: os.remove(processed_file_path)
+                except OSError: pass
+            if temp_dir and os.path.exists(temp_dir):
+                try: shutil.rmtree(temp_dir)
+                except OSError: pass
+            raise # Relanzar la excepción capturada
+
         except Exception as e:
-            logger.error(f"Error al importar archivo: {e}")
-            return None
-    
-    def export_transcription(self, transcription, base_path=None, formats=None):
+            # Errores inesperados
+            logger.error(f"Error inesperado durante la importación: {e}", exc_info=True)
+            if processed_file_path and os.path.exists(processed_file_path):
+                try: os.remove(processed_file_path)
+                except OSError: pass
+            if temp_dir and os.path.exists(temp_dir):
+                try: shutil.rmtree(temp_dir)
+                except OSError: pass
+            # Envolver en FileProcessingError
+            raise FileProcessingError(f"Error inesperado al importar: {e}") from e
+
+    def export_transcription(self, transcription: TranscriptionResult, output_path: str, format: str):
         """
-        Exporta una transcripción en diferentes formatos
-        
+        Exporta la transcripción a un formato específico.
+
         Args:
-            transcription (dict): Resultado de la transcripción
-            base_path (str, optional): Ruta base para guardar archivos
-            formats (list, optional): Formatos a exportar (txt, srt, vtt)
-        
-        Returns:
-            dict: Rutas de los archivos exportados por formato
+            transcription (TranscriptionResult): Objeto con los datos de la transcripción.
+            output_path (str): Ruta base para el archivo de salida (sin extensión).
+            format (str): Formato de exportación ('txt', 'srt', 'vtt', 'json').
+
+        Raises:
+            FileProcessingError: Si la transcripción está vacía, el formato no es soportado,
+                                 o hay errores de escritura o espacio en disco.
+            ValueError: Si el formato no es válido.
         """
-        if not transcription:
-            logger.error("Transcripción vacía, no se puede exportar")
-            return {}
-        
-        # Determinar formatos a exportar
-        if formats is None:
-            formats = self.config.get("export_formats", ["txt", "srt", "vtt"])
-        
-        # Determinar ruta base
-        if base_path is None:
-            # Usar directorio de exportación predeterminado
-            export_dir = self.config.get("export_directory")
-            if not export_dir or not os.path.isdir(export_dir):
-                export_dir = os.path.join(str(Path.home()), "Transcripciones")
-                os.makedirs(export_dir, exist_ok=True)
-            
-            # Generar nombre de archivo basado en la fecha y hora
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            base_path = os.path.join(export_dir, f"transcripcion_{timestamp}")
-        
-        # Verificar espacio antes de exportar
-        if not self._has_enough_disk_space(base_path):
-            logger.error("Espacio en disco insuficiente para exportar transcripción")
-            return {}
-        
-        # Asegurar que el directorio existe
-        os.makedirs(os.path.dirname(base_path), exist_ok=True)
-        
-        # Exportar cada formato solicitado
-        result = {}
-        
+        if not transcription or not transcription.segments:
+            msg = "Transcripción vacía, no se puede exportar"
+            logger.error(msg)
+            raise FileProcessingError(msg)
+
+        if format not in self.export_formats:
+            msg = f"Formato de exportación no soportado: {format}"
+            logger.error(msg)
+            raise ValueError(msg) # Usar ValueError para formato inválido
+
+        output_file = f"{output_path}.{format}"
+
+        # Verificar espacio en disco (estimación simple)
+        estimated_size = len(transcription.text) * 2 # Estimación muy burda
         try:
-            if "txt" in formats:
-                txt_path = save_txt(transcription, f"{base_path}.txt")
-                result["txt"] = txt_path
-            
-            if "srt" in formats:
-                srt_path = save_srt(transcription, f"{base_path}.srt")
-                result["srt"] = srt_path
-            
-            if "vtt" in formats:
-                vtt_path = save_vtt(transcription, f"{base_path}.vtt")
-                result["vtt"] = vtt_path
-            
-            logger.info(f"Transcripción exportada a {base_path}.* en formatos: {', '.join(formats)}")
-            return result
-            
+            statvfs = os.statvfs(os.path.dirname(output_file))
+            available_space = statvfs.f_frsize * statvfs.f_bavail
+            if estimated_size > available_space:
+                msg = "Espacio en disco insuficiente para exportar transcripción"
+                logger.error(msg)
+                raise FileProcessingError(msg)
+        except OSError as e:
+            msg = f"Error al verificar espacio en disco para exportación: {e}"
+            logger.error(msg)
+            raise FileProcessingError(msg) from e
+
+        logger.info(f"Exportando transcripción a: {output_file} (formato: {format})" )
+        self.signals.status_update.emit(f"Exportando a {format.upper()}...")
+
+        try:
+            exporter = getattr(text_utils, f"export_to_{format}")
+            exporter(transcription, output_file)
+
+            logger.info(f"Transcripción exportada exitosamente a {output_file}")
+            self.signals.status_update.emit(f"Exportado a {format.upper()}")
+            self.signals.export_finished.emit(output_file, format)
+
+        except AttributeError:
+            # Esto no debería ocurrir si self.export_formats está sincronizado con text_utils
+            msg = f"Función de exportación no encontrada para el formato: {format}"
+            logger.error(msg)
+            raise ValueError(msg) # Error de programación, formato inválido
+        except (IOError, OSError) as e:
+            # Errores de escritura
+            msg = f"Error de E/S al exportar transcripción a {output_file}: {e}"
+            logger.error(msg, exc_info=True)
+            raise FileProcessingError(msg) from e
         except Exception as e:
-            logger.error(f"Error al exportar transcripción: {e}")
-            return result
-    
-    def _normalize_audio(self, file_path):
+            # Otros errores inesperados (p.ej., dentro de text_utils)
+            msg = f"Error inesperado al exportar transcripción: {e}"
+            logger.error(msg, exc_info=True)
+            raise FileProcessingError(msg) from e
+
+    def _process_audio_file(self, file_path: str, temp_dir: str) -> str:
         """
-        Normaliza audio para mejor transcripción
-        
+        Procesa un archivo de audio: aplica normalización y/o VAD si están configurados.
+        Devuelve la ruta al archivo procesado (puede ser el original).
+
         Args:
-            file_path (str): Ruta al archivo a normalizar
-        
+            file_path (str): Ruta al archivo WAV importado.
+            temp_dir (str): Directorio temporal para archivos intermedios.
+
         Returns:
-            str: Ruta al archivo normalizado
+            str: Ruta al archivo de audio listo para transcribir.
+
+        Raises:
+            FFMpegError: Si FFMPEG falla durante el procesamiento.
+            FileProcessingError: Si ocurren otros errores de procesamiento.
+            ConfigError: Si hay error al leer la configuración.
         """
-        temp_file = None
+        processed_path = file_path
+        needs_cleanup = []
+
         try:
-            temp_file = tempfile.NamedTemporaryFile(
-                suffix='.wav',
-                prefix='whisper_normalized_',
-                delete=False
-            ).name
-            try:
-                normalized_path = convert_to_wav(
-                    file_path, 
-                    temp_file,
-                    sample_rate=16000,
-                    channels=1,
-                    normalize=True
-                )
-            except Exception as e:
-                logger.warning(f"Error al normalizar audio: {e}")
-                # Limpiar archivo temporal en caso de error
-                if temp_file and os.path.exists(temp_file):
+            normalize = self.config.get("audio_normalize", False)
+            use_vad = self.config.get("audio_vad", False)
+
+            if normalize:
+                logger.debug("Normalizando audio...")
+                self.signals.status_update.emit("Normalizando audio...")
+                try:
+                    # normalize_audio ahora lanza excepciones
+                    normalized_file = audio_utils.normalize_audio(processed_path, temp_dir)
+                    if normalized_file != processed_path:
+                        needs_cleanup.append(processed_path) # Marcar original para borrar si normalización tuvo éxito
+                    processed_path = normalized_file
+                    logger.debug(f"Audio normalizado: {processed_path}")
+                except (FFMpegError, FileProcessingError) as norm_err:
+                    # Error en normalización no es fatal, continuar con archivo anterior
+                    logger.warning(f"Error al normalizar audio (continuando sin normalizar): {norm_err}")
+                    # No añadir a needs_cleanup, no se creó archivo nuevo
+
+            if use_vad:
+                logger.debug("Aplicando VAD...")
+                self.signals.status_update.emit("Aplicando VAD...")
+                try:
+                    # apply_vad ahora lanza excepciones
+                    vad_file = audio_utils.apply_vad(processed_path, temp_dir)
+                    if vad_file != processed_path:
+                         # Marcar archivo anterior (normalizado o original) para borrar si VAD tuvo éxito
+                        needs_cleanup.append(processed_path)
+                    processed_path = vad_file
+                    logger.debug(f"VAD aplicado: {processed_path}")
+                except (FFMpegError, FileProcessingError) as vad_err:
+                    # Error en VAD no es fatal, continuar con archivo anterior
+                    logger.warning(f"Error al aplicar VAD (continuando sin VAD): {vad_err}")
+                    # No añadir a needs_cleanup
+
+            return processed_path
+
+        except ConfigError as e:
+            logger.error(f"Error al leer configuración de procesamiento de audio: {e}")
+            raise # Relanzar error de configuración
+        except Exception as e:
+            # Capturar otros errores inesperados
+            logger.error(f"Error inesperado procesando audio: {e}", exc_info=True)
+            raise FileProcessingError(f"Error inesperado procesando audio: {e}") from e
+        finally:
+            # Limpiar archivos intermedios que ya no se necesitan
+            for f in needs_cleanup:
+                if f and os.path.exists(f) and f != file_path: # No borrar el importado original
                     try:
-                        os.unlink(temp_file)
-                    except Exception:
-                        pass
-                raise  # Propagar el error
-            # Registrar el archivo temporal para limpieza posterior
-            if normalized_path != file_path:
-                self.temp_files.append(normalized_path)
-            return normalized_path
-        except Exception as e:
-            logger.warning(f"Error al normalizar audio: {e}, usando original")
-            return file_path
-    
+                        os.remove(f)
+                        logger.debug(f"Archivo intermedio eliminado: {f}")
+                    except OSError as e:
+                        logger.warning(f"Error al eliminar archivo intermedio {f}: {e}")
+
     def cleanup_temp_files(self):
-        """Elimina archivos temporales"""
+        """Limpia los archivos temporales generados por FileManager."""
         for temp_file in self.temp_files:
             try:
                 if os.path.exists(temp_file):
@@ -280,3 +363,14 @@ class FileManager:
                 logger.warning(f"Error al eliminar archivo temporal {temp_file}: {e}")
         
         self.temp_files = []
+
+    def _has_enough_space(self, input_file_path: str) -> bool:
+        """Estima si hay suficiente espacio para importar y procesar."""
+        try:
+            total, used, free = shutil.disk_usage(os.path.dirname(os.path.abspath(input_file_path)))
+            required_space = os.path.getsize(input_file_path) * 2  # Estimación simple
+            return free > required_space
+        except OSError as e:
+            logger.error(f"No se pudo verificar el espacio en disco: {e}")
+            # Asumir que no hay espacio suficiente si no se puede verificar
+            return False
