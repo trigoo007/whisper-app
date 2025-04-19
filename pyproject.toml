@@ -15,11 +15,19 @@ requires-python = ">=3.8"
 dependencies = [
     "PyQt5==5.15.10",
     "openai-whisper==20230314",
-    "torch==2.1.2",
+    "torch>=2.2.0",
     "numpy==1.24.4",
     "soundfile==0.12.1",
     "scipy==1.11.4",
     "tqdm==4.66.1"
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+    "Topic :: Utilities",
 ]
 
 [project.urls]
@@ -43,16 +51,6 @@ whisper-app = "whisper_app.app:main"
 
 [project.gui-scripts]
 whisper-app-gui = "whisper_app.app:main"
-
-[project.classifiers]
-classifiers = [
-    "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
-    "License :: OSI Approved :: MIT License",
-    "Operating System :: OS Independent",
-    "Topic :: Multimedia :: Sound/Audio :: Speech",
-    "Topic :: Utilities",
-]
 
 # PyInstaller configuración
 [tool.pyinstaller]

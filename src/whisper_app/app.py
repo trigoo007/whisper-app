@@ -13,11 +13,12 @@ from pathlib import Path
 from PyQt5.QtWidgets import QApplication, QMessageBox
 from PyQt5.QtCore import QTranslator, QLocale
 
-from whisper_app.ui.main_window import MainWindow
-from whisper_app.core.config_manager import ConfigManager
-from whisper_app.ui.styles import apply_theme
-from whisper_app.core.exceptions import WhisperAppError
-from whisper_app.ui.dialogs import ErrorReportDialog
+# Cambiar los imports absolutos a relativos
+from .ui.main_window import MainWindow
+from .core.config_manager import ConfigManager
+from .ui.styles import apply_theme
+from .core.exceptions import WhisperAppError
+from .ui.dialogs import ErrorReportDialog
 
 # Configurar logging en ubicación estándar
 logs_dir = None
@@ -202,7 +203,7 @@ def main():
         
         # Corregir ruta de los archivos de traducción
         try:
-            from whisper_app.resources import TRANSLATIONS_PATH
+            from .resources import TRANSLATIONS_PATH
             translator_path = os.path.join(
                 TRANSLATIONS_PATH,
                 f"{locale}.qm"

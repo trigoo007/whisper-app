@@ -6,6 +6,7 @@ Ventana principal de WhisperApp
 
 import os
 import logging
+import tempfile
 from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
     QLabel, QPushButton, QComboBox, QListWidget, QListWidgetItem,

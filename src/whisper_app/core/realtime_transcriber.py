@@ -114,60 +114,131 @@ class RealtimeTranscriber:
         """
         try:
             window_samples = int(self.window_size * self.sample_rate)
+            audio_to_process = np.array([], dtype=np.float32) # Inicializar
+
             if final:
-                audio_window = self.audio_buffer
-            else:
-                if len(self.audio_buffer) > window_samples:
-                    audio_window = self.audio_buffer[-window_samples:]
+                # Procesar todo el buffer restante
+                if len(self.audio_buffer) > 0:
+                    audio_to_process = self.audio_buffer
+                    self.audio_buffer = np.array([], dtype=np.float32) # Limpiar buffer
                 else:
-                    audio_window = self.audio_buffer
-            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as f:
-                temp_path = f.name
-            save_audio(audio_window, temp_path, self.sample_rate)
+                    return self.accumulated_text # No hay nada que procesar
+            else:
+                # Procesar una ventana deslizante
+                # Asegurarse de tener suficientes datos para una ventana completa
+                if len(self.audio_buffer) >= window_samples:
+                    # Tomar la última ventana de audio
+                    audio_to_process = self.audio_buffer[-window_samples:]
+                    # Avanzar el buffer eliminando la parte procesada (step_size)
+                    step_samples = int(self.step_size * self.sample_rate)
+                    # Conservar solo la parte que no se solapa completamente
+                    # Esto es una simplificación, la lógica de solapamiento real está en el texto
+                    # Mantenemos el buffer para la siguiente ventana
+                    # self.audio_buffer = self.audio_buffer[step_samples:] # <- Esta línea podría ser problemática, mejor manejar el solapamiento en el texto
+                else:
+                    # No hay suficientes datos para una ventana completa todavía
+                    return self.accumulated_text
+
+            if audio_to_process.size == 0:
+                 return self.accumulated_text
+
+            # Transcribir directamente desde el array numpy
             try:
                 options = {
                     "task": "transcribe",
-                    "language": self.config.get("language"),
-                    "beam_size": 1,
+                    "language": self.config.get("language"), # Usar el idioma configurado globalmente
+                    "beam_size": 1, # Optimizado para velocidad en tiempo real
                     "best_of": 1,
-                    "temperature": 0.0
+                    "temperature": 0.0, # Más determinista
+                    "fp16": self.config.get("fp16", True) # Usar fp16 si está configurado
+                    # Considerar añadir 'prompt' o 'prefix' si se quiere guiar la transcripción
+                    # "prompt": self.accumulated_text[-50:] # Ejemplo: usar las últimas 50 chars como prompt
                 }
-                result = self.transcriber.model.transcribe(temp_path, **options)
-                try:
-                    os.unlink(temp_path)
-                except Exception:
-                    pass
-                if final:
-                    self.accumulated_text = result["text"].strip()
+                # Asegurar que el modelo está disponible
+                if not self.transcriber or not self.transcriber.model:
+                    logger.error("Modelo no disponible para transcripción en tiempo real.")
+                    self.signals.error.emit("Modelo no disponible.")
                     return self.accumulated_text
+
+                # Ejecutar transcripción
+                result = self.transcriber.model.transcribe(audio_to_process, **options)
+
                 new_text = result["text"].strip()
-                if not new_text:
+                logger.debug(f"Realtime chunk processed. New text: '{new_text}'")
+
+                if final:
+                    # Si es final, simplemente añadir el último fragmento
+                    if new_text:
+                         # Lógica simple de solapamiento para la parte final
+                        if self.accumulated_text and new_text:
+                            # Buscar si las últimas palabras del acumulado están al inicio del nuevo
+                            overlap_found = False
+                            for i in range(min(5, len(self.accumulated_text.split()), len(new_text.split())), 0, -1):
+                                last_words_accum = " ".join(self.accumulated_text.split()[-i:]).lower()
+                                first_words_new = " ".join(new_text.split()[:i]).lower()
+                                if last_words_accum == first_words_new:
+                                    self.accumulated_text += " " + " ".join(new_text.split()[i:])
+                                    overlap_found = True
+                                    break
+                            if not overlap_found:
+                                self.accumulated_text += " " + new_text
+                        elif new_text:
+                            self.accumulated_text = new_text
+                    self.accumulated_text = clean_text(self.accumulated_text)
+                    logger.info(f"Realtime finished. Final text: '{self.accumulated_text}'")
                     return self.accumulated_text
-                if self.accumulated_text:
-                    overlap_size = min(len(self.accumulated_text), len(new_text)) // 2
-                    if overlap_size > 0:
-                        best_overlap = 0
-                        best_overlap_size = 0
-                        for i in range(1, min(overlap_size, 10)):
-                            last_words = ' '.join(self.accumulated_text.split()[-i:]).lower()
-                            first_words = ' '.join(new_text.split()[:i]).lower()
-                            if last_words in first_words or first_words in last_words:
-                                if i > best_overlap_size:
-                                    best_overlap_size = i
-                                    best_overlap = i
-                        if best_overlap > 0:
-                            self.accumulated_text = self.accumulated_text + " " + " ".join(new_text.split()[best_overlap:])
-                        else:
-                            self.accumulated_text = self.accumulated_text + " " + new_text
-                    else:
-                        self.accumulated_text = self.accumulated_text + " " + new_text
                 else:
-                    self.accumulated_text = new_text
-                self.accumulated_text = clean_text(self.accumulated_text)
-                return self.accumulated_text
+                    # Lógica de acumulación y solapamiento para progreso
+                    if not new_text:
+                        return self.accumulated_text # No añadir nada si está vacío
+
+                    if self.accumulated_text:
+                        # Lógica de solapamiento mejorada (buscar coincidencia más larga)
+                        best_overlap_len = 0
+                        # Iterar desde un solapamiento potencial razonable hasta 1 palabra
+                        max_possible_overlap = min(len(self.accumulated_text.split()), len(new_text.split()), 10) # Limitar a 10 palabras
+                        for i in range(max_possible_overlap, 0, -1):
+                            last_words = " ".join(self.accumulated_text.split()[-i:]).lower()
+                            first_words = " ".join(new_text.split()[:i]).lower()
+                            # Ser más flexible con la coincidencia (ignorar mayúsculas/minúsculas)
+                            if last_words == first_words:
+                                best_overlap_len = i
+                                break # Encontrar la coincidencia más larga y parar
+
+                        if best_overlap_len > 0:
+                            # Añadir solo la parte no solapada
+                            words_to_add = new_text.split()[best_overlap_len:]
+                            if words_to_add:
+                                self.accumulated_text += " " + " ".join(words_to_add)
+                        else:
+                            # Si no hay solapamiento claro, añadir todo (podría repetirse)
+                            # Opcional: Podríamos intentar una heurística más simple si no hay solapamiento
+                            # Por ejemplo, si el nuevo texto es muy corto, podría ser una corrección
+                            if len(new_text.split()) < 3 and len(self.accumulated_text.split()) > 0:
+                                # Podría ser una corrección de la última palabra, intentar reemplazar
+                                pass # Por ahora, simplemente añadimos
+                            self.accumulated_text += " " + new_text
+                    else:
+                        # Primer fragmento de texto
+                        self.accumulated_text = new_text
+
+                    self.accumulated_text = clean_text(self.accumulated_text)
+                    logger.debug(f"Realtime progress. Accumulated text: '{self.accumulated_text}'")
+                    # Avanzar el buffer eliminando la parte procesada (step_size)
+                    step_samples = int(self.step_size * self.sample_rate)
+                    if len(self.audio_buffer) >= step_samples:
+                         self.audio_buffer = self.audio_buffer[step_samples:]
+
+                    return self.accumulated_text
+
             except Exception as e:
-                logger.error(f"Error al transcribir en tiempo real: {e}")
-                return self.accumulated_text
+                # Log detallado del error de transcripción
+                logger.error(f"Error al transcribir fragmento en tiempo real: {e}", exc_info=True)
+                # No emitir señal de error aquí para no interrumpir continuamente
+                # self.signals.error.emit(f"Error transcripción: {e}")
+                return self.accumulated_text # Devolver texto acumulado hasta ahora
+
         except Exception as e:
-            logger.error(f"Error en procesamiento de buffer: {e}")
+            logger.error(f"Error general en procesamiento de buffer: {e}", exc_info=True)
+            self.signals.error.emit(f"Error procesamiento: {e}")
             return self.accumulated_text

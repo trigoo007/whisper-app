@@ -10,8 +10,8 @@ Contiene los componentes de la interfaz de usuario:
 - Estilos de interfaz
 """
 
-from whisper_app.ui.main_window import MainWindow
-from whisper_app.ui.dialogs import (
+from .main_window import MainWindow
+from .dialogs import (
     ConfigDialog, 
     AudioDeviceDialog, 
     AdvancedOptionsDialog,
@@ -19,4 +19,4 @@ from whisper_app.ui.dialogs import (
     ErrorReportDialog,
     ModelDownloadDialog
 )
-from whisper_app.ui.styles import apply_theme, ELEGANT_DARK_PALETTE
+from .styles import apply_theme, ELEGANT_DARK_PALETTE
