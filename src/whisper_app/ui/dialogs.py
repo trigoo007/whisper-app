@@ -95,7 +95,7 @@ class ConfigDialog(QDialog):
         
         # Tema
         self.theme_combo = QComboBox()
-        self.theme_combo.addItems(["Sistema", "Claro", "Oscuro"])
+        self.theme_combo.addItems(["Sistema", "Claro", "Oscuro", "Oscuro Elegante"])
         ui_layout.addRow("Tema:", self.theme_combo)
         
         # Idioma
@@ -412,8 +412,8 @@ class ConfigDialog(QDialog):
         """Carga la configuración actual en la interfaz"""
         try:
             # Pestaña general
-            theme = self.config.get("ui_theme", "system")
-            theme_index = {"system": 0, "light": 1, "dark": 2}.get(theme, 0)
+            theme = self.config.get("ui_theme", "elegant_dark")
+            theme_index = {"system": 0, "light": 1, "dark": 2, "elegant_dark": 3}.get(theme, 3)
             self.theme_combo.setCurrentIndex(theme_index)
             
             lang = self.config.get("ui_language", "auto")
@@ -518,7 +518,7 @@ class ConfigDialog(QDialog):
         """Aplica la configuración actual"""
         try:
             # Pestaña general
-            theme_map = {0: "system", 1: "light", 2: "dark"}
+            theme_map = {0: "system", 1: "light", 2: "dark", 3: "elegant_dark"}
             self.config.set("ui_theme", theme_map[self.theme_combo.currentIndex()])
             
             lang_map = {0: "es", 1: "en", 2: "auto"}
@@ -566,6 +566,14 @@ class ConfigDialog(QDialog):
             self.config.set("delete_temp_on_exit", self.delete_temp_check.isChecked())
             
             logger.info("Configuración aplicada")
+            
+            # Mostrar mensaje de tema
+            if theme_map[self.theme_combo.currentIndex()] != self.config.get("ui_theme"):
+                QMessageBox.information(
+                    self,
+                    "Cambio de tema",
+                    "El cambio de tema se aplicará al reiniciar la aplicación."
+                )
             
         except Exception as e:
             logger.error(f"Error al aplicar configuración: {e}")
@@ -1590,8 +1598,11 @@ class ErrorReportDialog(QDialog):
             "<li>Verifica que FFMPEG esté instalado y en el PATH</li>"
             "<li>Asegúrate de tener suficiente espacio en disco y memoria</li>"
             "<li>Comprueba que el archivo de audio/video sea válido</li>"
+            "<li>Verifica la conexión a internet si necesitas descargar modelos</li>"
+            "<li>Comprueba los permisos de escritura en la carpeta de la aplicación</li>"
             "<li>Reinicia la aplicación e intenta nuevamente</li>"
             "</ul>"
+            "<p>Para más ayuda, consulta la sección de <b>Resolución de problemas</b> en el README.</p>"
         )
         actions_label.setWordWrap(True)
         actions_label.setTextFormat(Qt.RichText)

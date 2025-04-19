@@ -170,4 +170,4 @@ class RealtimeTranscriber:
                 return self.accumulated_text
         except Exception as e:
             logger.error(f"Error en procesamiento de buffer: {e}")
-            return self.accumulated_text 
+            return self.accumulated_text

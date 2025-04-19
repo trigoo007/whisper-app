@@ -21,36 +21,21 @@ def verify_ffmpeg():
         bool: True si FFMPEG está disponible, False si no
     """
     try:
-        # Intentar ejecutar ffmpeg -version
-        subprocess.run(
-            ["ffmpeg", "-version"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=True
-        )
-        logger.debug("FFMPEG verificado correctamente")
+        # Intentar ejecutar ffmpeg -version para obtener información detallada
+        result = subprocess.run(["ffmpeg", "-version"], 
+                               capture_output=True, 
+                               text=True, 
+                               check=True)
+        version_info = result.stdout.split('\n')[0]
+        logger.info(f"FFMPEG encontrado: {version_info}")
         return True
-    except (subprocess.SubprocessError, FileNotFoundError):
-        # Intentar con ruta específica si está configurada
-        try:
-            from whisper_app.core.config_manager import ConfigManager
-            config = ConfigManager()
-            ffmpeg_path = config.get("ffmpeg_path")
-            
-            if ffmpeg_path and os.path.exists(ffmpeg_path):
-                subprocess.run(
-                    [ffmpeg_path, "-version"],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    check=True
-                )
-                logger.debug(f"FFMPEG verificado en ruta: {ffmpeg_path}")
-                return True
-        except Exception as e:
-            logger.debug(f"Error al verificar FFMPEG en ruta específica: {e}")
-        
-        logger.warning("FFMPEG no encontrado en el sistema")
-        return False
+    except subprocess.SubprocessError as e:
+        logger.debug(f"Error al verificar FFMPEG: {e}")
+    except Exception as e:
+        logger.debug(f"Error al verificar FFMPEG en ruta específica: {e}")
+    
+    logger.warning("FFMPEG no encontrado en el sistema")
+    return False
 
 def find_ffmpeg():
     """

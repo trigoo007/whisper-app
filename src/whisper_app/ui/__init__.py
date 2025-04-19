@@ -19,3 +19,4 @@ from whisper_app.ui.dialogs import (
     ErrorReportDialog,
     ModelDownloadDialog
 )
+from whisper_app.ui.styles import apply_theme, ELEGANT_DARK_PALETTE

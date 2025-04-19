@@ -34,20 +34,7 @@ class AudioLevelMeter(QWidget):
         self.level_bar.setRange(0, 100)
         self.level_bar.setValue(0)
         self.level_bar.setTextVisible(False)
-        self.level_bar.setStyleSheet("""
-            QProgressBar {
-                border: 1px solid #bbb;
-                border-radius: 2px;
-                background: #f0f0f0;
-                height: 20px;
-            }
-            QProgressBar::chunk {
-                background-color: qlineargradient(
-                    x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #0a0, stop:0.7 #0d0, stop:1 #f00
-                );
-            }
-        """)
+        # Eliminamos el estilo inline ya que ahora usamos el tema global
         layout.addWidget(self.level_bar)
         
         # Etiqueta de pico
