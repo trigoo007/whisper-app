@@ -32,10 +32,8 @@ from whisper_app.utils.text_utils import extract_keywords
 from whisper_app.utils.language_data import get_stopwords
 from whisper_app.core.realtime_transcriber import RealtimeTranscriber
 
-try:
-    import psutil
-except ImportError:
-    psutil = None
+from whisper_app.utils.dependencies import import_optional
+psutil = import_optional("psutil")
 
 logger = logging.getLogger(__name__)
 

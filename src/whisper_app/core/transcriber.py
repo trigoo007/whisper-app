@@ -16,6 +16,7 @@ from PyQt5.QtCore import QObject, pyqtSignal
 # Añadir importación directa de verify_ffmpeg
 from whisper_app.utils.ffmpeg_utils import verify_ffmpeg, get_file_duration
 from whisper_app.utils.audio_utils import apply_vad
+from whisper_app.utils.paths import MODELS_DIR, get_model_path
 
 logger = logging.getLogger(__name__)
 

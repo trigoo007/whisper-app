@@ -105,10 +105,9 @@ def check_critical_dependencies():
             missing.append(pkg)
     
     # Dependencias opcionales
+    from whisper_app.utils.dependencies import import_optional
     for pkg in ["pydub"]:
-        try:
-            importlib.import_module(pkg)
-        except ImportError:
+        if import_optional(pkg) is None:
             optional_missing.append(pkg)
     
     # FFMPEG

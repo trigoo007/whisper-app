@@ -11,18 +11,12 @@ import subprocess
 import numpy as np
 from pathlib import Path
 
-# Importar módulos al inicio del archivo
-try:
-    import soundfile as sf
-except ImportError:
-    sf = None
-    logging.warning("El módulo 'soundfile' no está instalado. Algunas funciones de audio pueden ser limitadas o menos precisas.")
+# Importar función para manejo de dependencias opcionales
+from whisper_app.utils.dependencies import import_optional
 
-try:
-    from scipy import signal
-except ImportError:
-    signal = None
-    logging.warning("El módulo 'scipy' no está instalado. El remuestreo de audio será menos preciso.")
+# Importar módulos opcionales de manera elegante
+sf = import_optional('soundfile')
+signal = import_optional('scipy.signal', 'scipy')
 
 from whisper_app.utils import ffmpeg_utils
 from whisper_app.core.exceptions import FFMpegError, FileProcessingError
