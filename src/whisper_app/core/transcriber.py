@@ -73,6 +73,15 @@ class Transcriber(QObject):
                 del self.model
                 gc.collect()
             
+            # Configurar el directorio de caché de modelos
+            model_cache_dir = self.config.get("model_cache_dir", "")
+            if not model_cache_dir:
+                os.environ["XDG_CACHE_HOME"] = MODELS_DIR
+            else:
+                os.environ["XDG_CACHE_HOME"] = model_cache_dir
+                
+            logger.debug(f"Directorio de caché para modelos: {os.environ['XDG_CACHE_HOME']}")
+            
             # Cargar el nuevo modelo
             fp16 = self.config.get("fp16", True)
             self.model = whisper.load_model(model_name, fp16=fp16)

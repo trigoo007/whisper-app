@@ -9,9 +9,12 @@ import json
 import logging
 from typing import Any, Dict, Optional
 from pathlib import Path
+from datetime import datetime
 from PyQt5.QtCore import QStandardPaths
 
 from whisper_app.core.exceptions import ConfigError # Importar excepción
+from whisper_app.utils.paths import APP_DATA_DIR, MODELS_DIR
+from whisper_app.utils.paths import APP_DATA_DIR, MODELS_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -139,7 +142,9 @@ class ConfigManager:
             "recent_files": [],
             "ui_theme": "system",
             "ui_language": "auto",
-            "advanced_mode": False
+            "advanced_mode": False,
+            "use_model_cache": True,
+            "model_cache_dir": MODELS_DIR
         }
     
     def get(self, key: str, default: Any = None) -> Any:
